@@ -1,0 +1,58 @@
+tradingviewmcp — Deon Menezes custom made
+==========================================
+
+This product includes software derived from work by third parties. Their
+copyright notices are preserved below as required by the MIT License.
+
+--------------------------------------------------------------------------
+1. Original project: tradesdontlie/tradingview-mcp
+--------------------------------------------------------------------------
+Source:    https://github.com/tradesdontlie/tradingview-mcp
+License:   MIT
+Copyright: Copyright (c) 2026 tradesdontlie
+
+All original code in this repository (the MCP server scaffold, CDP bridge,
+Pine Script analysis pipeline, CLI surface, and accompanying documentation
+templates) was authored by the upstream maintainers of tradesdontlie/
+tradingview-mcp. This distribution retains their work under the MIT terms
+of the upstream LICENSE file.
+
+--------------------------------------------------------------------------
+2. This distribution: deonmenezes/tradingviewmcp
+--------------------------------------------------------------------------
+Maintainer: Deon Menezes <deonmenezescodes@gmail.com>
+Source:     https://github.com/deonmenezes/tradingviewmcp
+License:    MIT (same terms as upstream)
+Copyright:  Copyright (c) 2026 Deon Menezes
+
+Modifications made in this distribution:
+  - Renamed npm package from "tradingview-mcp" to "tradingviewmcp".
+  - Added "Deon Menezes custom made" branding to README and package.json.
+  - Added this NOTICE file describing the upstream attribution chain.
+  - Republished under deonmenezes/tradingviewmcp on GitHub.
+
+No proprietary or trademarked TradingView material is included in this
+repository. The Chrome DevTools Protocol bridge interacts only with the
+user's locally installed TradingView Desktop application as documented in
+the README.
+
+--------------------------------------------------------------------------
+3. Third-party runtime dependencies
+--------------------------------------------------------------------------
+This project depends on the following npm packages at runtime. Each is
+distributed under its own license; see the respective package for full
+terms.
+
+  - @modelcontextprotocol/sdk   (MIT) — Anthropic, PBC
+  - chrome-remote-interface     (MIT) — Andrea Cardaci and contributors
+
+--------------------------------------------------------------------------
+4. Trademarks
+--------------------------------------------------------------------------
+"TradingView" is a trademark of TradingView, Inc.
+"Claude" and "Claude Code" are trademarks of Anthropic, PBC.
+"Pine Script" is a trademark of TradingView, Inc.
+
+This project is not affiliated with, endorsed by, or sponsored by
+TradingView, Inc. or Anthropic, PBC. All trademarks are the property of
+their respective owners.

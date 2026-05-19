@@ -389,6 +389,16 @@ By using this software, you acknowledge and agree that:
 
 **Use at your own risk.** If you are unsure whether your intended use complies with TradingView's terms, do not use this tool.
 
+## Credits & Attribution
+
+**tradingviewmcp** is a custom build maintained by **Deon Menezes** ([@deonmenezes](https://github.com/deonmenezes)).
+
+- **Original project:** [tradesdontlie/tradingview-mcp](https://github.com/tradesdontlie/tradingview-mcp) — MIT-licensed upstream that this build is derived from. All credit for the original design, MCP tooling layer, Pine Script analysis flow, and CDP bridge implementation belongs to the upstream authors.
+- **This fork:** renamed package to `tradingviewmcp`, added "Deon Menezes custom made" branding, retained upstream MIT copyright per license terms, and provides a separate distribution channel under [`deonmenezes/tradingviewmcp`](https://github.com/deonmenezes/tradingviewmcp).
+- **Trademarks:** TradingView is a registered trademark of TradingView, Inc. This project is not affiliated with TradingView. Claude and Claude Code are products of Anthropic, PBC. All marks are property of their respective owners.
+
+See [NOTICE](NOTICE) for the full attribution chain.
+
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
