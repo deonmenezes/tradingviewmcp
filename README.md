@@ -1,6 +1,6 @@
-# tradingviewmcp — Deon Menezes custom made
+# tradingviewmcp
 
-> Custom build by **Deon Menezes**. Based on the original [tradesdontlie/tradingview-mcp](https://github.com/tradesdontlie/tradingview-mcp) (MIT).
+> **This is a wholesale fork of [tradesdontlie/tradingview-mcp](https://github.com/tradesdontlie/tradingview-mcp) (MIT).** All of the original design and code — the MCP server, the Chrome DevTools Protocol bridge, the Pine Script analysis pipeline, the CLI, and the documentation — is the work of **[tradesdontlie](https://github.com/tradesdontlie)**. This is not an original project; it is a re-publication of that repository under a different name, redistributed under the upstream MIT license. Please star and support the [original repo](https://github.com/tradesdontlie/tradingview-mcp).
 
 Personal AI assistant for your TradingView Desktop charts. Connects Claude Code to your locally running TradingView app via Chrome DevTools Protocol for AI-assisted chart analysis, Pine Script development, and workflow automation.
 
@@ -391,10 +391,10 @@ By using this software, you acknowledge and agree that:
 
 ## Credits & Attribution
 
-**tradingviewmcp** is a custom build maintained by **Deon Menezes** ([@deonmenezes](https://github.com/deonmenezes)).
+**tradingviewmcp** is a **wholesale fork** of [tradesdontlie/tradingview-mcp](https://github.com/tradesdontlie/tradingview-mcp), republished under [`deonmenezes/tradingviewmcp`](https://github.com/deonmenezes/tradingviewmcp) by Deon Menezes ([@deonmenezes](https://github.com/deonmenezes)).
 
-- **Original project:** [tradesdontlie/tradingview-mcp](https://github.com/tradesdontlie/tradingview-mcp) — MIT-licensed upstream that this build is derived from. All credit for the original design, MCP tooling layer, Pine Script analysis flow, and CDP bridge implementation belongs to the upstream authors.
-- **This fork:** renamed package to `tradingviewmcp`, added "Deon Menezes custom made" branding, retained upstream MIT copyright per license terms, and provides a separate distribution channel under [`deonmenezes/tradingviewmcp`](https://github.com/deonmenezes/tradingviewmcp).
+- **Original author and owner:** [**tradesdontlie**](https://github.com/tradesdontlie) — [tradesdontlie/tradingview-mcp](https://github.com/tradesdontlie/tradingview-mcp), MIT-licensed. **All credit for the design and implementation** — the MCP tooling layer, the Pine Script analysis flow, the CDP bridge, and the original documentation — belongs to tradesdontlie. This repository would not exist without their work.
+- **What this fork changed:** essentially nothing of substance — it renames the npm package to `tradingviewmcp` and republishes the upstream code under the same MIT terms. It is not an independent or "custom" implementation.
 - **Trademarks:** TradingView is a registered trademark of TradingView, Inc. This project is not affiliated with TradingView. Claude and Claude Code are products of Anthropic, PBC. All marks are property of their respective owners.
 
 See [NOTICE](NOTICE) for the full attribution chain.

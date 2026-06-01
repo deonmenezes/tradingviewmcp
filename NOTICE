@@ -1,8 +1,11 @@
-tradingviewmcp — Deon Menezes custom made
-==========================================
+tradingviewmcp — a wholesale fork of tradesdontlie/tradingview-mcp
+=================================================================
 
-This product includes software derived from work by third parties. Their
-copyright notices are preserved below as required by the MIT License.
+This repository is a wholesale fork (re-publication) of the upstream
+project tradesdontlie/tradingview-mcp. Substantially all of the code and
+documentation is the original work of tradesdontlie, used here under the
+MIT License. Their copyright notice is preserved below as the license
+requires.
 
 --------------------------------------------------------------------------
 1. Original project: tradesdontlie/tradingview-mcp
@@ -18,18 +21,19 @@ tradingview-mcp. This distribution retains their work under the MIT terms
 of the upstream LICENSE file.
 
 --------------------------------------------------------------------------
-2. This distribution: deonmenezes/tradingviewmcp
+2. This fork: deonmenezes/tradingviewmcp
 --------------------------------------------------------------------------
-Maintainer: Deon Menezes <deonmenezescodes@gmail.com>
-Source:     https://github.com/deonmenezes/tradingviewmcp
-License:    MIT (same terms as upstream)
-Copyright:  Copyright (c) 2026 Deon Menezes
+Fork maintainer: Deon Menezes <deonmenezescodes@gmail.com>
+Source:          https://github.com/deonmenezes/tradingviewmcp
+License:         MIT (same terms as upstream)
 
-Modifications made in this distribution:
-  - Renamed npm package from "tradingview-mcp" to "tradingviewmcp".
-  - Added "Deon Menezes custom made" branding to README and package.json.
-  - Added this NOTICE file describing the upstream attribution chain.
-  - Republished under deonmenezes/tradingviewmcp on GitHub.
+This fork claims no original authorship over the project's code. The only
+changes made here are packaging/republication, not a new implementation:
+  - Renamed the npm package from "tradingview-mcp" to "tradingviewmcp".
+  - Republished the upstream repository under deonmenezes/tradingviewmcp.
+  - Added this NOTICE file documenting that the project is a wholesale fork.
+
+Copyright in the forked code remains with tradesdontlie (see section 1).
 
 No proprietary or trademarked TradingView material is included in this
 repository. The Chrome DevTools Protocol bridge interacts only with the

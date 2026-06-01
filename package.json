@@ -1,8 +1,11 @@
 {
   "name": "tradingviewmcp",
   "version": "1.0.0",
-  "description": "tradingviewmcp — Deon Menezes custom made MCP bridge for TradingView Desktop via Chrome DevTools Protocol",
-  "author": "Deon Menezes",
+  "description": "Wholesale fork of tradesdontlie/tradingview-mcp — MCP bridge for TradingView Desktop via Chrome DevTools Protocol. Original work by tradesdontlie.",
+  "author": "tradesdontlie (original author) — https://github.com/tradesdontlie/tradingview-mcp",
+  "contributors": [
+    "Deon Menezes (fork maintainer) <deonmenezescodes@gmail.com>"
+  ],
   "type": "module",
   "main": "src/server.js",
   "bin": {
