@@ -170,12 +170,14 @@ f_mitigate(bearBoxes, bearTops, bearBots, bearStart)
 f_nearestIndex(_tops, _bots) =>
     bestIdx = -1
     bestDist = 1e10
-    for i = 0 to array.size(_tops) - 1
-        mid = (array.get(_tops, i) + array.get(_bots, i)) / 2
-        d = math.abs(mid - close)
-        if d < bestDist
-            bestDist := d
-            bestIdx := i
+    n = array.size(_tops)
+    if n > 0
+        for i = 0 to n - 1
+            mid = (array.get(_tops, i) + array.get(_bots, i)) / 2
+            d = math.abs(mid - close)
+            if d < bestDist
+                bestDist := d
+                bestIdx := i
     bestIdx
 
 // Longs react out of the most recent bearish FVG; shorts out of bullish FVG.
