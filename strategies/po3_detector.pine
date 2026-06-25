@@ -62,8 +62,7 @@ f_isTradeableHour(_h) =>
     array.includes(tradeableHours, _h)
 
 inMacroWindow = minuteET >= (60 - macroWindowMin) or minuteET < macroWindowMin
-if showMacroBg
-    bgcolor(inMacroWindow ? color.new(color.yellow, 92) : na, title = "Macro Window")
+bgcolor(showMacroBg and inMacroWindow ? color.new(color.yellow, 92) : na, title = "Macro Window")
 
 barsPerCutoff = math.max(1, math.round(cutoffMinutes * 60 / timeframe.in_seconds()))
 
@@ -244,8 +243,13 @@ if sweepShort and not biasIsLong
 smtHigh = request.security(smtTicker, timeframe.period, high, lookahead = barmerge.lookahead_off)
 smtLow  = request.security(smtTicker, timeframe.period, low,  lookahead = barmerge.lookahead_off)
 
-smtBearishAtHigh = useSMT and high >= ta.highest(high, smtLookback) and smtHigh < ta.highest(smtHigh, smtLookback)[1]
-smtBullishAtLow  = useSMT and low  <= ta.lowest(low,  smtLookback) and smtLow  > ta.lowest(smtLow,  smtLookback)[1]
+primaryHighest    = ta.highest(high, smtLookback)
+primaryLowest     = ta.lowest(low, smtLookback)
+correlatedHighest = ta.highest(smtHigh, smtLookback)
+correlatedLowest  = ta.lowest(smtLow, smtLookback)
+
+smtBearishAtHigh = useSMT and high >= primaryHighest and smtHigh < correlatedHighest[1]
+smtBullishAtLow  = useSMT and low  <= primaryLowest  and smtLow  > correlatedLowest[1]
 
 smtOkLong  = not useSMT or smtBullishAtLow
 smtOkShort = not useSMT or smtBearishAtHigh
