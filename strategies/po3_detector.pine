@@ -1,0 +1,295 @@
+//@version=6
+indicator("PO3 / Power of Three Setup Detector", shorttitle="PO3", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// =============================================================================
+// PO3 (Power of Three / AMD: Accumulation -> Manipulation -> Distribution)
+// setup detector. Mechanical rules only — see README in po3/ for the full
+// spec this was ported from. This is detection/visualization ONLY; no
+// backtest or strategy.* calls live here, so it can run on a live chart as
+// a plain indicator. Pair with TradingView's bar replay or Strategy Tester
+// (wrapped separately) if you want historical performance stats.
+//
+// Run this on the timeframe you intend to take the POI/confirmation reads
+// from (1m/5m/15m per the POI priority in the spec) — Pine indicators only
+// see the chart's own timeframe for live confirmation logic; the FVG engine
+// below operates on whatever timeframe the chart is set to.
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// Inputs
+// ---------------------------------------------------------------------------
+g_session = "Session"
+sessionTimezone   = input.string("America/New_York", "Session Timezone", group = g_session)
+tradeableOpensStr = input.string("10,14", "Tradeable 4H Open Hours (ET, comma-separated)", group = g_session)
+macroWindowMin    = input.int(10, "Macro Window Minutes (each side of the hour)", minval = 1, maxval = 30, group = g_session)
+cutoffMinutes     = input.int(150, "Session Stand-down Cutoff (minutes after open)", minval = 10, group = g_session)
+showMacroBg       = input.bool(true, "Highlight Macro Windows", group = g_session)
+
+g_bias = "Bias"
+biasModeStr = input.string("Auto", "Bias Mode", options = ["Auto", "Long", "Short"], group = g_bias)
+
+g_poi = "POI / FVG"
+showFVGBoxes   = input.bool(true, "Show FVG Boxes", group = g_poi)
+maxActiveFVGs  = input.int(15, "Max Tracked FVGs per Side", minval = 5, maxval = 50, group = g_poi)
+boxExtendBars  = input.int(40, "FVG Box Extend (bars)", minval = 5, maxval = 200, group = g_poi)
+
+g_conf = "Confirmation"
+allowSingleCandleCISD = input.bool(false, "Allow Single-Candle CISD (weak, per spec)", group = g_conf)
+requireSweep           = input.bool(true, "Require Liquidity Sweep of Session Extreme First", group = g_conf)
+
+g_smt = "SMT (optional confluence)"
+useSMT    = input.bool(false, "Require SMT Divergence Confluence", group = g_smt)
+smtSymbol = input.symbol(syminfo.tickerid, "Correlated Symbol (e.g. ES1! when charting NQ1!)", group = g_smt)
+smtLookback = input.int(20, "SMT Swing Lookback (bars)", minval = 5, maxval = 100, group = g_smt)
+
+// ---------------------------------------------------------------------------
+// Time / session helpers
+// ---------------------------------------------------------------------------
+hourET   = hour(time, sessionTimezone)
+minuteET = minute(time, sessionTimezone)
+
+f_strToHours(_s) =>
+    parts = str.split(_s, ",")
+    arr = array.new<int>()
+    for p in parts
+        array.push(arr, int(str.tonumber(str.trim(p))))
+    arr
+
+var int[] tradeableHours = f_strToHours(tradeableOpensStr)
+
+f_isTradeableHour(_h) =>
+    array.includes(tradeableHours, _h)
+
+inMacroWindow = minuteET >= (60 - macroWindowMin) or minuteET < macroWindowMin
+if showMacroBg
+    bgcolor(inMacroWindow ? color.new(color.yellow, 92) : na, title = "Macro Window")
+
+barsPerCutoff = math.max(1, math.round(cutoffMinutes * 60 / timeframe.in_seconds()))
+
+// New tradeable-session marker: minute snaps to 0 at the configured hour and
+// chart timeframe divides the hour evenly (1/2/3/5/10/15/30/60m).
+isNewSessionOpen = minuteET == 0 and f_isTradeableHour(hourET) and (hourET != hourET[1] or minuteET != minuteET[1])
+
+var bool  sessActive   = false
+var float sessHigh     = na
+var float sessLow      = na
+var int   sessOpenBar  = na
+var bool  sessSwept    = false
+var bool  sessTaken    = false
+var float manipExtreme = na
+
+if isNewSessionOpen
+    sessActive   := true
+    sessHigh     := high
+    sessLow      := low
+    sessOpenBar  := bar_index
+    sessSwept    := false
+    sessTaken    := false
+    manipExtreme := na
+else if sessActive
+    sessHigh := math.max(sessHigh, high)
+    sessLow  := math.min(sessLow, low)
+    if (bar_index - sessOpenBar) > barsPerCutoff
+        sessActive := false  // stand down for this session per cutoff rule
+
+if isNewSessionOpen
+    line.new(bar_index, low, bar_index, high, extend = extend.both, color = color.new(color.gray, 70), style = line.style_dotted)
+
+// ---------------------------------------------------------------------------
+// Bias: Daily PO3 / OHLC genetic-makeup heuristic, non-repainting
+// (uses the prior completed daily candle only).
+// ---------------------------------------------------------------------------
+[dOpen, dHigh, dLow, dClose] = request.security(syminfo.tickerid, "D", [open[1], high[1], low[1], close[1]], lookahead = barmerge.lookahead_off)
+
+dRange    = dHigh - dLow
+closePos  = dRange > 0 ? (dClose - dLow) / dRange : 0.5
+dailyBiasIsLong = closePos >= 0.5
+
+biasIsLong  = biasModeStr == "Long" ? true : biasModeStr == "Short" ? false : dailyBiasIsLong
+biasLabel   = biasModeStr == "Auto" ? (dailyBiasIsLong ? "Long (auto)" : "Short (auto)") : biasModeStr
+
+// ---------------------------------------------------------------------------
+// FVG detection (3-candle imbalance) + mitigation tracking
+// ---------------------------------------------------------------------------
+var box[]   bullBoxes = array.new<box>()
+var float[] bullTops  = array.new<float>()
+var float[] bullBots  = array.new<float>()
+var int[]   bullStart = array.new<int>()
+
+var box[]   bearBoxes = array.new<box>()
+var float[] bearTops  = array.new<float>()
+var float[] bearBots  = array.new<float>()
+var int[]   bearStart = array.new<int>()
+
+f_pushCapped(_boxes, _tops, _bots, _starts, _box, _top, _bot, _start, _maxN) =>
+    array.push(_boxes, _box)
+    array.push(_tops, _top)
+    array.push(_bots, _bot)
+    array.push(_starts, _start)
+    if array.size(_boxes) > _maxN
+        box.delete(array.shift(_boxes))
+        array.shift(_tops)
+        array.shift(_bots)
+        array.shift(_starts)
+
+isBullFVG = low > high[2]
+isBearFVG = high < low[2]
+
+if isBullFVG
+    top = low
+    bot = high[2]
+    b = showFVGBoxes ? box.new(bar_index[2], top, bar_index + boxExtendBars, bot, border_color = color.new(color.teal, 60), bgcolor = color.new(color.teal, 88)) : na
+    f_pushCapped(bullBoxes, bullTops, bullBots, bullStart, b, top, bot, bar_index, maxActiveFVGs)
+
+if isBearFVG
+    top = low[2]
+    bot = high
+    b = showFVGBoxes ? box.new(bar_index[2], top, bar_index + boxExtendBars, bot, border_color = color.new(color.maroon, 60), bgcolor = color.new(color.maroon, 88)) : na
+    f_pushCapped(bearBoxes, bearTops, bearBots, bearStart, b, top, bot, bar_index, maxActiveFVGs)
+
+// Mitigate (remove) gaps that price has traded back through.
+f_mitigate(_boxes, _tops, _bots, _starts) =>
+    i = array.size(_boxes) - 1
+    while i >= 0
+        t = array.get(_tops, i)
+        bo = array.get(_bots, i)
+        if low <= t and high >= bo
+            bx = array.get(_boxes, i)
+            if not na(bx)
+                box.delete(bx)
+            array.remove(_boxes, i)
+            array.remove(_tops, i)
+            array.remove(_bots, i)
+            array.remove(_starts, i)
+        i -= 1
+
+f_mitigate(bullBoxes, bullTops, bullBots, bullStart)
+f_mitigate(bearBoxes, bearTops, bearBots, bearStart)
+
+// Nearest unmitigated opposing FVG to current price (the POI to react out of).
+f_nearestIndex(_tops, _bots) =>
+    bestIdx = -1
+    bestDist = 1e10
+    for i = 0 to array.size(_tops) - 1
+        mid = (array.get(_tops, i) + array.get(_bots, i)) / 2
+        d = math.abs(mid - close)
+        if d < bestDist
+            bestDist := d
+            bestIdx := i
+    bestIdx
+
+// Longs react out of the most recent bearish FVG; shorts out of bullish FVG.
+poiIdxLong  = f_nearestIndex(bearTops, bearBots)
+poiIdxShort = f_nearestIndex(bullTops, bullBots)
+
+poiTopLong    = poiIdxLong  >= 0 ? array.get(bearTops, poiIdxLong)  : na
+poiBotShort   = poiIdxShort >= 0 ? array.get(bullBots, poiIdxShort) : na
+
+// ---------------------------------------------------------------------------
+// Tier 1 — IFVG: body CLOSE back through the opposing FVG (wick doesn't count)
+// ---------------------------------------------------------------------------
+tier1Long  = not na(poiTopLong)  and close > poiTopLong  and close[1] <= poiTopLong
+tier1Short = not na(poiBotShort) and close < poiBotShort and close[1] >= poiBotShort
+
+// ---------------------------------------------------------------------------
+// Tier 2 — CISD: last consecutive run (>=2 candles, configurable) in the
+// manipulation direction; body close back through that run's first open.
+// ---------------------------------------------------------------------------
+var float curRunOpen = na
+var int   curRunDir   = 0
+var int   curRunLen   = 0
+var float lastDownOpen = na
+var int   lastDownLen  = 0
+var float lastUpOpen   = na
+var int   lastUpLen    = 0
+
+dir = close > open ? 1 : close < open ? -1 : 0
+
+if dir != 0 and dir == curRunDir
+    curRunLen += 1
+else
+    if curRunDir == -1
+        lastDownOpen := curRunOpen
+        lastDownLen  := curRunLen
+    else if curRunDir == 1
+        lastUpOpen := curRunOpen
+        lastUpLen  := curRunLen
+    curRunDir  := dir
+    curRunOpen := open
+    curRunLen  := dir == 0 ? 0 : 1
+
+minRunLen = allowSingleCandleCISD ? 1 : 2
+
+tier2Long  = not na(lastDownOpen) and lastDownLen >= minRunLen and close > lastDownOpen and close[1] <= lastDownOpen
+tier2Short = not na(lastUpOpen)   and lastUpLen   >= minRunLen and close < lastUpOpen   and close[1] >= lastUpOpen
+
+// ---------------------------------------------------------------------------
+// Manipulation: liquidity sweep of the session's accumulation extreme
+// (wick beyond the prior-bar session extreme, close back on the other side)
+// ---------------------------------------------------------------------------
+sweepLong  = sessActive and not sessSwept and not na(sessLow[1])  and low  < sessLow[1]  and close > sessLow[1]
+sweepShort = sessActive and not sessSwept and not na(sessHigh[1]) and high > sessHigh[1] and close < sessHigh[1]
+
+if sweepLong and biasIsLong
+    sessSwept    := true
+    manipExtreme := low
+if sweepShort and not biasIsLong
+    sessSwept    := true
+    manipExtreme := high
+
+// ---------------------------------------------------------------------------
+// SMT divergence (optional confluence) vs a correlated symbol
+// ---------------------------------------------------------------------------
+smtHigh = request.security(smtSymbol, timeframe.period, high, lookahead = barmerge.lookahead_off)
+smtLow  = request.security(smtSymbol, timeframe.period, low,  lookahead = barmerge.lookahead_off)
+
+smtBearishAtHigh = useSMT and high >= ta.highest(high, smtLookback) and smtHigh < ta.highest(smtHigh, smtLookback)[1]
+smtBullishAtLow  = useSMT and low  <= ta.lowest(low,  smtLookback) and smtLow  > ta.lowest(smtLow,  smtLookback)[1]
+
+smtOkLong  = not useSMT or smtBullishAtLow
+smtOkShort = not useSMT or smtBearishAtHigh
+
+// ---------------------------------------------------------------------------
+// Entry assembly: gate chain mirrors the mechanical spec
+// ---------------------------------------------------------------------------
+canEnter = sessActive and not sessTaken and (not requireSweep or sessSwept)
+
+longSignal  = canEnter and biasIsLong     and (tier1Long  or tier2Long)  and smtOkLong
+shortSignal = canEnter and (not biasIsLong) and (tier1Short or tier2Short) and smtOkShort
+
+if longSignal
+    sessTaken := true
+    stopLevel = na(manipExtreme) ? sessLow : manipExtreme
+    line.new(bar_index, stopLevel, bar_index + boxExtendBars, stopLevel, color = color.red, style = line.style_dashed)
+    label.new(bar_index, low, text = "PO3 LONG\n" + (tier1Long ? "IFVG" : "CISD"), style = label.style_label_up, color = color.new(color.green, 0), textcolor = color.white, yloc = yloc.belowbar)
+
+if shortSignal
+    sessTaken := true
+    stopLevel = na(manipExtreme) ? sessHigh : manipExtreme
+    line.new(bar_index, stopLevel, bar_index + boxExtendBars, stopLevel, color = color.red, style = line.style_dashed)
+    label.new(bar_index, high, text = "PO3 SHORT\n" + (tier1Short ? "IFVG" : "CISD"), style = label.style_label_down, color = color.new(color.red, 0), textcolor = color.white, yloc = yloc.abovebar)
+
+alertcondition(longSignal, title = "PO3 Long Setup", message = "PO3 long confirmation (IFVG/CISD) on {{ticker}} {{interval}}")
+alertcondition(shortSignal, title = "PO3 Short Setup", message = "PO3 short confirmation (IFVG/CISD) on {{ticker}} {{interval}}")
+
+// ---------------------------------------------------------------------------
+// Bias readout
+// ---------------------------------------------------------------------------
+var label biasLbl = na
+if isNewSessionOpen
+    if not na(biasLbl)
+        label.delete(biasLbl)
+    biasLbl := label.new(bar_index, high, text = "Bias: " + biasLabel, style = label.style_label_down, color = color.new(color.blue, 70), textcolor = color.white, size = size.small)
+
+// ---------------------------------------------------------------------------
+// Notes / known limitations (kept as comments, not invented behavior):
+//  - POI/FVG priority across 15m -> 5m -> 1m (spec §4.3) is NOT multiplexed
+//    here; the FVG engine reads whatever timeframe the chart is set to.
+//    Set the chart timeframe to match the POI tier you want to react from.
+//  - Tier 3 (mixed-bias reversal confirmation) and the A+/A/B/C setup
+//    ranking rubric are NOT implemented — both are explicitly unspecified
+//    in the source rules (see po3/po3/scoring.py for the same caveat in the
+//    Python port). Do not infer thresholds that aren't in the spec.
+//  - Top/bottom-ticking and no-manipulation continuation entries are
+//    intentionally excluded (discretionary per the source material).
+// ---------------------------------------------------------------------------
