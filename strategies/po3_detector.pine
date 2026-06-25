@@ -39,7 +39,8 @@ requireSweep           = input.bool(true, "Require Liquidity Sweep of Session Ex
 
 g_smt = "SMT (optional confluence)"
 useSMT    = input.bool(false, "Require SMT Divergence Confluence", group = g_smt)
-smtSymbol = input.symbol(syminfo.tickerid, "Correlated Symbol (e.g. ES1! when charting NQ1!)", group = g_smt)
+smtSymbol = input.symbol("", "Correlated Symbol (e.g. ES1! when charting NQ1!)", group = g_smt)
+smtTicker = smtSymbol == "" ? syminfo.tickerid : smtSymbol
 smtLookback = input.int(20, "SMT Swing Lookback (bars)", minval = 5, maxval = 100, group = g_smt)
 
 // ---------------------------------------------------------------------------
@@ -240,8 +241,8 @@ if sweepShort and not biasIsLong
 // ---------------------------------------------------------------------------
 // SMT divergence (optional confluence) vs a correlated symbol
 // ---------------------------------------------------------------------------
-smtHigh = request.security(smtSymbol, timeframe.period, high, lookahead = barmerge.lookahead_off)
-smtLow  = request.security(smtSymbol, timeframe.period, low,  lookahead = barmerge.lookahead_off)
+smtHigh = request.security(smtTicker, timeframe.period, high, lookahead = barmerge.lookahead_off)
+smtLow  = request.security(smtTicker, timeframe.period, low,  lookahead = barmerge.lookahead_off)
 
 smtBearishAtHigh = useSMT and high >= ta.highest(high, smtLookback) and smtHigh < ta.highest(smtHigh, smtLookback)[1]
 smtBullishAtLow  = useSMT and low  <= ta.lowest(low,  smtLookback) and smtLow  > ta.lowest(smtLow,  smtLookback)[1]
