@@ -35,11 +35,13 @@ enableAsia      = input.bool(true,  "Trade Asia Session (18:00, 22:00 & 02:00 ET
 macroWindowMin  = input.int(10, "Macro Window Minutes (each side of the hour)", minval = 1, maxval = 30, group = g_session)
 cutoffMinutes   = input.int(150, "Session Stand-down Cutoff (minutes after open)", minval = 10, group = g_session)
 showMacroBg     = input.bool(true, "Highlight Macro Windows", group = g_session)
-// Asia kill-zone window is informational/status-table only (the session state
+// Kill-zone windows are informational/status-table only (the session state
 // machine below is driven by 4H opens, not by an entry-window range) — exact
 // boundaries are a tunable judgment call, not a hard rule from the source.
 asiaKzStartHour = input.int(20, "Asia Kill Zone Start (ET hour, info only)", minval = 0, maxval = 23, group = g_session)
 asiaKzEndHour   = input.int(0,  "Asia Kill Zone End (ET hour, info only)",   minval = 0, maxval = 23, group = g_session)
+nyKzStartHour   = input.int(7,  "NY Kill Zone Start (ET hour, info only)",   minval = 0, maxval = 23, group = g_session)
+nyKzEndHour     = input.int(10, "NY Kill Zone End (ET hour, info only)",     minval = 0, maxval = 23, group = g_session)
 
 g_bias = "Bias"
 biasModeStr = input.string("Auto", "Bias Mode", options = ["Auto", "Long", "Short"], group = g_bias)
@@ -150,6 +152,7 @@ inMacroWindow = minuteET >= (60 - macroWindowMin) or minuteET < macroWindowMin
 bgcolor(showMacroBg and inMacroWindow ? color.new(color.yellow, 92) : na, title = "Macro Window")
 
 inAsiaKillZone = asiaKzStartHour <= asiaKzEndHour ? (hourET >= asiaKzStartHour and hourET < asiaKzEndHour) : (hourET >= asiaKzStartHour or hourET < asiaKzEndHour)
+inNYKillZone   = nyKzStartHour   <= nyKzEndHour   ? (hourET >= nyKzStartHour   and hourET < nyKzEndHour)   : (hourET >= nyKzStartHour   or hourET < nyKzEndHour)
 
 barsPerCutoff = math.max(1, math.round(cutoffMinutes * 60 / timeframe.in_seconds()))
 
@@ -583,7 +586,7 @@ if isNewSessionOpen
 // ---------------------------------------------------------------------------
 // Status table: active session, bias, news state, 15m/5m setup state.
 // ---------------------------------------------------------------------------
-var table statusTbl = table.new(position.top_right, 2, 6, border_width = 1)
+var table statusTbl = table.new(position.top_right, 2, 7, border_width = 1)
 if showStatusTable and barstate.islast
     table.cell(statusTbl, 0, 0, "Session", text_color = color.white, bgcolor = color.new(color.gray, 30))
     table.cell(statusTbl, 1, 0, sessActive ? sessName : "Inactive", text_color = color.white, bgcolor = color.new(color.gray, 30))
@@ -591,12 +594,14 @@ if showStatusTable and barstate.islast
     table.cell(statusTbl, 1, 1, biasLabel, text_color = color.white, bgcolor = color.new(color.gray, 50))
     table.cell(statusTbl, 0, 2, "News", text_color = color.white, bgcolor = color.new(color.gray, 30))
     table.cell(statusTbl, 1, 2, newsStateLabel + (activeNewsTag != "" ? " (" + activeNewsTag + ")" : ""), text_color = color.white, bgcolor = color.new(color.gray, 30))
-    table.cell(statusTbl, 0, 3, "Asia KZ", text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(statusTbl, 1, 3, inAsiaKillZone ? "Active" : "Outside", text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(statusTbl, 0, 4, "15m Setup", text_color = color.white, bgcolor = color.new(color.gray, 30))
-    table.cell(statusTbl, 1, 4, canEnter15m ? (confLong_15m ? "Long Ready" : confShort_15m ? "Short Ready" : "Forming") : "—", text_color = color.white, bgcolor = color.new(color.gray, 30))
-    table.cell(statusTbl, 0, 5, "5m Setup", text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(statusTbl, 1, 5, canEnter5m ? (confLong_5m ? "Long Ready" : confShort_5m ? "Short Ready" : "Forming") : "—", text_color = color.white, bgcolor = color.new(color.gray, 50))
+    table.cell(statusTbl, 0, 3, "NY KZ", text_color = color.white, bgcolor = color.new(color.gray, 50))
+    table.cell(statusTbl, 1, 3, inNYKillZone ? "Active" : "Outside", text_color = color.white, bgcolor = color.new(color.gray, 50))
+    table.cell(statusTbl, 0, 4, "Asia KZ", text_color = color.white, bgcolor = color.new(color.gray, 30))
+    table.cell(statusTbl, 1, 4, inAsiaKillZone ? "Active" : "Outside", text_color = color.white, bgcolor = color.new(color.gray, 30))
+    table.cell(statusTbl, 0, 5, "15m Setup", text_color = color.white, bgcolor = color.new(color.gray, 50))
+    table.cell(statusTbl, 1, 5, canEnter15m ? (confLong_15m ? "Long Ready" : confShort_15m ? "Short Ready" : "Forming") : "—", text_color = color.white, bgcolor = color.new(color.gray, 50))
+    table.cell(statusTbl, 0, 6, "5m Setup", text_color = color.white, bgcolor = color.new(color.gray, 30))
+    table.cell(statusTbl, 1, 6, canEnter5m ? (confLong_5m ? "Long Ready" : confShort_5m ? "Short Ready" : "Forming") : "—", text_color = color.white, bgcolor = color.new(color.gray, 30))
 
 // ---------------------------------------------------------------------------
 // Notes / known limitations (kept as comments, not invented behavior):
