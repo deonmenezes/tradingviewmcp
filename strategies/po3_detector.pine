@@ -712,12 +712,13 @@ if isNewSessionOpen
 f_minutesToNextAnchor() =>
     _nowMin = hourET * 60 + minuteET
     _best = int(na)
-    for h = 0 to array.size(tradeableHours) - 1
-        _anchorMin = array.get(tradeableHours, h) * 60
-        _delta = _anchorMin - _nowMin
-        _deltaWrapped = _delta <= 0 ? _delta + 1440 : _delta
-        if na(_best) or _deltaWrapped < _best
-            _best := _deltaWrapped
+    if array.size(tradeableHours) > 0
+        for h = 0 to array.size(tradeableHours) - 1
+            _anchorMin = array.get(tradeableHours, h) * 60
+            _delta = _anchorMin - _nowMin
+            _deltaWrapped = _delta <= 0 ? _delta + 1440 : _delta
+            if na(_best) or _deltaWrapped < _best
+                _best := _deltaWrapped
     _best
 
 minsToNextAnchor = f_minutesToNextAnchor()
