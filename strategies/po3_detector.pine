@@ -68,6 +68,8 @@ g_mtf2 = "15m / 5m Independent Signals"
 enable15m       = input.bool(true, "Enable 15m Signal", group = g_mtf2)
 enable5m        = input.bool(true, "Enable 5m Signal", group = g_mtf2)
 confirmMode15_5 = input.string("Either", "Confirmation Mode (15m/5m)", options = ["IFVG only", "CISD only", "Either"], group = g_mtf2)
+sigTF15         = input.timeframe("15", "15m Signal Timeframe", group = g_mtf2)
+sigTF5          = input.timeframe("5",  "5m Signal Timeframe", group = g_mtf2)
 
 g_news = "News Gate (manual, timing-only — Pine has no news feed)"
 newsEnable     = input.bool(false, "Enable News Gate", group = g_news)
@@ -122,6 +124,12 @@ newsLbl12  = input.string("",  "Event 12 Label", group = g_news)
 
 g_out = "Output"
 showStatusTable = input.bool(true, "Show Status Table", group = g_out)
+
+g_tbl = "Status Table (ES / NQ)"
+esSymbol    = input.symbol("ES1!", "ES Symbol", group = g_tbl)
+nqSymbol    = input.symbol("NQ1!", "NQ Symbol", group = g_tbl)
+tblCorner   = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = g_tbl)
+tblTextSize = input.string("Small", "Text Size", options = ["Tiny", "Small", "Normal"], group = g_tbl)
 
 // ---------------------------------------------------------------------------
 // Time / session helpers
@@ -370,11 +378,125 @@ f_cisdEngine() =>
 
 [poiTopLong1h, poiBotShort1h]   = request.security(syminfo.tickerid, "60", f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
 [poiTopLong30m, poiBotShort30m] = request.security(syminfo.tickerid, "30", f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
-[poiTopLong15m, poiBotShort15m] = request.security(syminfo.tickerid, "15", f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
-[poiTopLong5m,  poiBotShort5m]  = request.security(syminfo.tickerid, "5",  f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[poiTopLong15m, poiBotShort15m] = request.security(syminfo.tickerid, sigTF15, f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[poiTopLong5m,  poiBotShort5m]  = request.security(syminfo.tickerid, sigTF5,  f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
 
-[cisdDownOpen15m, cisdDownLen15m, cisdUpOpen15m, cisdUpLen15m] = request.security(syminfo.tickerid, "15", f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
-[cisdDownOpen5m,  cisdDownLen5m,  cisdUpOpen5m,  cisdUpLen5m]  = request.security(syminfo.tickerid, "5",  f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[cisdDownOpen15m, cisdDownLen15m, cisdUpOpen15m, cisdUpLen15m] = request.security(syminfo.tickerid, sigTF15, f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[cisdDownOpen5m,  cisdDownLen5m,  cisdUpOpen5m,  cisdUpLen5m]  = request.security(syminfo.tickerid, sigTF5,  f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+
+// ---------------------------------------------------------------------------
+// Session/sweep state, wrapped for per-symbol use (ES/NQ status table). Same
+// open/extreme/cutoff/sweep logic as the chart-TF machine above, just made
+// callable via request.security since that machine's `var` state has to
+// live inside the target symbol's execution context to track ITS bars.
+// ---------------------------------------------------------------------------
+f_sessionEngine() =>
+    _hourET   = hour(time, sessionTimezone)
+    _minuteET = minute(time, sessionTimezone)
+    _isOpen   = _minuteET == 0 and array.includes(tradeableHours, _hourET) and (_hourET != _hourET[1] or _minuteET != _minuteET[1])
+
+    var bool   _active    = false
+    var float  _high      = na
+    var float  _low       = na
+    var int    _openBar   = na
+    var bool   _swept     = false
+    var float  _manipLow  = na
+    var float  _manipHigh = na
+    var string _name      = na
+
+    if _isOpen
+        _active    := true
+        _high      := high
+        _low       := low
+        _openBar   := bar_index
+        _swept     := false
+        _manipLow  := na
+        _manipHigh := na
+        _name      := f_sessionName(_hourET)
+    else if _active
+        _high := math.max(_high, high)
+        _low  := math.min(_low, low)
+        if (bar_index - _openBar) > barsPerCutoff
+            _active := false
+
+    if _active and not _swept and not na(_low[1]) and low < _low[1] and close > _low[1]
+        _swept    := true
+        _manipLow := low
+    if _active and not _swept and not na(_high[1]) and high > _high[1] and close < _high[1]
+        _swept     := true
+        _manipHigh := high
+
+    [_active, _swept, _manipLow, _manipHigh, _name]
+
+f_dailyBias(_h, _l, _c) =>
+    _range = _h - _l
+    _pos   = _range > 0 ? (_c - _l) / _range : 0.5
+    _pos >= 0.5
+
+[esActive, esSwept, esManipLow, esManipHigh, esSessName] = request.security(esSymbol, timeframe.period, f_sessionEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[nqActive, nqSwept, nqManipLow, nqManipHigh, nqSessName] = request.security(nqSymbol, timeframe.period, f_sessionEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+
+[esO, esH, esL, esC] = request.security(esSymbol, "D", [open[1], high[1], low[1], close[1]], lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[nqO, nqH, nqL, nqC] = request.security(nqSymbol, "D", [open[1], high[1], low[1], close[1]], lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+esBiasIsLong = f_dailyBias(esH, esL, esC)
+nqBiasIsLong = f_dailyBias(nqH, nqL, nqC)
+
+[esPoiTop15, esPoiBot15] = request.security(esSymbol, sigTF15, f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[esPoiTop5,  esPoiBot5]  = request.security(esSymbol, sigTF5,  f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[nqPoiTop15, nqPoiBot15] = request.security(nqSymbol, sigTF15, f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[nqPoiTop5,  nqPoiBot5]  = request.security(nqSymbol, sigTF5,  f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+
+[esCisdDown15, esCisdDownLen15, esCisdUp15, esCisdUpLen15] = request.security(esSymbol, sigTF15, f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[esCisdDown5,  esCisdDownLen5,  esCisdUp5,  esCisdUpLen5]  = request.security(esSymbol, sigTF5,  f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[nqCisdDown15, nqCisdDownLen15, nqCisdUp15, nqCisdUpLen15] = request.security(nqSymbol, sigTF15, f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[nqCisdDown5,  nqCisdDownLen5,  nqCisdUp5,  nqCisdUpLen5]  = request.security(nqSymbol, sigTF5,  f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+
+[esClose15, esClosePrev15] = request.security(esSymbol, sigTF15, [close, close[1]], lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[esClose5,  esClosePrev5]  = request.security(esSymbol, sigTF5,  [close, close[1]], lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[nqClose15, nqClosePrev15] = request.security(nqSymbol, sigTF15, [close, close[1]], lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[nqClose5,  nqClosePrev5]  = request.security(nqSymbol, sigTF5,  [close, close[1]], lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+
+// Same close-vs-level crossing formula already used by tier1Long_chart/_1h/
+// etc. above, generalized into a function so it isn't retyped per symbol/TF.
+f_tier1Confirm(_poi, _c, _cPrev, _isLong) =>
+    _isLong ? (not na(_poi) and _c > _poi and _cPrev <= _poi) : (not na(_poi) and _c < _poi and _cPrev >= _poi)
+
+f_tier2Confirm(_runOpen, _runLen, _c, _cPrev, _isLong) =>
+    not na(_runOpen) and _runLen >= minRunLen and (_isLong ? (_c > _runOpen and _cPrev <= _runOpen) : (_c < _runOpen and _cPrev >= _runOpen))
+
+esT1_15L = f_tier1Confirm(esPoiTop15, esClose15, esClosePrev15, true)
+esT1_15S = f_tier1Confirm(esPoiBot15, esClose15, esClosePrev15, false)
+esT1_5L  = f_tier1Confirm(esPoiTop5,  esClose5,  esClosePrev5,  true)
+esT1_5S  = f_tier1Confirm(esPoiBot5,  esClose5,  esClosePrev5,  false)
+esT2_15L = f_tier2Confirm(esCisdDown15, esCisdDownLen15, esClose15, esClosePrev15, true)
+esT2_15S = f_tier2Confirm(esCisdUp15,   esCisdUpLen15,   esClose15, esClosePrev15, false)
+esT2_5L  = f_tier2Confirm(esCisdDown5,  esCisdDownLen5,  esClose5,  esClosePrev5,  true)
+esT2_5S  = f_tier2Confirm(esCisdUp5,    esCisdUpLen5,    esClose5,  esClosePrev5,  false)
+
+nqT1_15L = f_tier1Confirm(nqPoiTop15, nqClose15, nqClosePrev15, true)
+nqT1_15S = f_tier1Confirm(nqPoiBot15, nqClose15, nqClosePrev15, false)
+nqT1_5L  = f_tier1Confirm(nqPoiTop5,  nqClose5,  nqClosePrev5,  true)
+nqT1_5S  = f_tier1Confirm(nqPoiBot5,  nqClose5,  nqClosePrev5,  false)
+nqT2_15L = f_tier2Confirm(nqCisdDown15, nqCisdDownLen15, nqClose15, nqClosePrev15, true)
+nqT2_15S = f_tier2Confirm(nqCisdUp15,   nqCisdUpLen15,   nqClose15, nqClosePrev15, false)
+nqT2_5L  = f_tier2Confirm(nqCisdDown5,  nqCisdDownLen5,  nqClose5,  nqClosePrev5,  true)
+nqT2_5S  = f_tier2Confirm(nqCisdUp5,    nqCisdUpLen5,    nqClose5,  nqClosePrev5,  false)
+
+// SMT for the table: same swing-divergence formula as smtBearishAtHigh/
+// smtBullishAtLow above, generalized to the explicit ES/NQ pairing (instead
+// of chart-symbol-vs-correlated-symbol) at the 5m signal timeframe.
+[esHighT, esLowT] = request.security(esSymbol, sigTF5, [high, low], lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[nqHighT, nqLowT] = request.security(nqSymbol, sigTF5, [high, low], lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+
+esHighestT = ta.highest(esHighT, smtLookback)
+esLowestT  = ta.lowest(esLowT, smtLookback)
+nqHighestT = ta.highest(nqHighT, smtLookback)
+nqLowestT  = ta.lowest(nqLowT, smtLookback)
+
+esBullSMT = esLowT  <= esLowestT  and nqLowT  > nqLowestT[1]
+esBearSMT = esHighT >= esHighestT and nqHighT < nqHighestT[1]
+nqBullSMT = nqLowT  <= nqLowestT  and esLowT  > esLowestT[1]
+nqBearSMT = nqHighT >= nqHighestT and esHighT < esHighestT[1]
 
 // ---------------------------------------------------------------------------
 // Tier 1 — IFVG: body CLOSE back through the opposing FVG (wick doesn't
@@ -584,24 +706,125 @@ if isNewSessionOpen
     biasLbl := label.new(bar_index, high, text = sessName + " | Bias: " + biasLabel, style = label.style_label_down, color = color.new(color.blue, 70), textcolor = color.white, size = size.small)
 
 // ---------------------------------------------------------------------------
-// Status table: active session, bias, news state, 15m/5m setup state.
+// Global strip helpers (reuse tradeableHours / inMacroWindow / news arrays):
+// next 4H anchor open countdown, next high-impact news countdown.
 // ---------------------------------------------------------------------------
-var table statusTbl = table.new(position.top_right, 2, 7, border_width = 1)
+f_minutesToNextAnchor() =>
+    _nowMin = hourET * 60 + minuteET
+    _best = int(na)
+    for h = 0 to array.size(tradeableHours) - 1
+        _anchorMin = array.get(tradeableHours, h) * 60
+        _delta = _anchorMin - _nowMin
+        _deltaWrapped = _delta <= 0 ? _delta + 1440 : _delta
+        if na(_best) or _deltaWrapped < _best
+            _best := _deltaWrapped
+    _best
+
+minsToNextAnchor = f_minutesToNextAnchor()
+
+f_nextNewsEvent() =>
+    _bestDelta = int(na)
+    _bestLabel = ""
+    if newsEnable
+        for i = 0 to array.size(newsTimes) - 1
+            if array.get(newsImpacts, i) == "High"
+                _evt   = array.get(newsTimes, i)
+                _delta = int((_evt - time) / 60000)
+                if _delta >= 0 and (na(_bestDelta) or _delta < _bestDelta)
+                    _bestDelta := _delta
+                    _bestLabel := array.get(newsLabels, i)
+    [_bestDelta, _bestLabel]
+
+[nextNewsMins, nextNewsLabel] = f_nextNewsEvent()
+
+f_fmtCountdown(_mins) =>
+    na(_mins) ? "—" : str.tostring(_mins / 60) + "h" + str.tostring(_mins % 60) + "m"
+
+// ---------------------------------------------------------------------------
+// Per-symbol column text/color helpers (terse cells, ES/NQ table). POI
+// reflects the nearest UNMITIGATED FVG from f_poiEngine() — it cannot show
+// a "tapped" state because mitigated levels are dropped internally before
+// they ever reach this table (documented simplification, not invented data).
+// ---------------------------------------------------------------------------
+f_drawTarget(_isLong, _h, _l) =>
+    _isLong ? "PDH" : "PDL"
+
+f_biasCellText(_isLong, _h, _l) =>
+    (_isLong ? "Bull -> " : "Bear -> ") + f_drawTarget(_isLong, _h, _l)
+
+f_poiCellText(_isLong, _top15, _bot15, _top5, _bot5) =>
+    _level = _isLong ? (not na(_top5) ? _top5 : _top15) : (not na(_bot5) ? _bot5 : _bot15)
+    _tf    = _isLong ? (not na(_top5) ? "5m" : not na(_top15) ? "15m" : "") : (not na(_bot5) ? "5m" : not na(_bot15) ? "15m" : "")
+    na(_level) ? "None" : _tf + " FVG " + str.tostring(_level, format.mintick)
+
+f_poiCellColor(_isLong, _top15, _bot15, _top5, _bot5) =>
+    _has = _isLong ? (not na(_top5) or not na(_top15)) : (not na(_bot5) or not na(_bot15))
+    _has ? color.new(color.orange, 25) : color.new(color.gray, 50)
+
+f_sweepCellText(_isLong, _swept, _manipLow, _manipHigh, _name) =>
+    _tag = na(_name) ? "—" : _name
+    _swept ? (_isLong ? _tag + " low (taken)" : _tag + " high (taken)") : _tag + " pending"
+
+f_confCellText(_t1_15, _t1_5, _t2_15, _t2_5) =>
+    _t1_5 ? "5m IFVG" : _t1_15 ? "15m IFVG" : _t2_5 ? "5m CISD" : _t2_15 ? "15m CISD" : "None"
+
+f_confValid(_t1_15, _t1_5, _t2_15, _t2_5) =>
+    _t1_15 or _t1_5 or _t2_15 or _t2_5
+
+f_smtCellText(_supportive, _conflicting) =>
+    _supportive ? "Aligned" : _conflicting ? "Conflict" : "None"
+
+// ---------------------------------------------------------------------------
+// Status table: global strip (session / next anchor / news) plus one row
+// each for ES and NQ across HTF Bias+Draw, POI, Sweep, Confirmation, SMT.
+// Extended from the original Session/Bias/News/KZ/15m/5m table rather than
+// creating a second table.
+// ---------------------------------------------------------------------------
+tblPos = tblCorner == "Top Left" ? position.top_left : tblCorner == "Bottom Right" ? position.bottom_right : tblCorner == "Bottom Left" ? position.bottom_left : position.top_right
+tblSz  = tblTextSize == "Tiny" ? size.tiny : tblTextSize == "Normal" ? size.normal : size.small
+
+esConfValid   = f_confValid(esT1_15L or esT1_15S, esT1_5L or esT1_5S, esT2_15L or esT2_15S, esT2_5L or esT2_5S)
+nqConfValid   = f_confValid(nqT1_15L or nqT1_15S, nqT1_5L or nqT1_5S, nqT2_15L or nqT2_15S, nqT2_5L or nqT2_5S)
+esConfText    = esBiasIsLong ? f_confCellText(esT1_15L, esT1_5L, esT2_15L, esT2_5L) : f_confCellText(esT1_15S, esT1_5S, esT2_15S, esT2_5S)
+nqConfText    = nqBiasIsLong ? f_confCellText(nqT1_15L, nqT1_5L, nqT2_15L, nqT2_5L) : f_confCellText(nqT1_15S, nqT1_5S, nqT2_15S, nqT2_5S)
+
+esSmtSupportive = esBiasIsLong ? esBullSMT : esBearSMT
+esSmtConflict   = esBiasIsLong ? esBearSMT : esBullSMT
+nqSmtSupportive = nqBiasIsLong ? nqBullSMT : nqBearSMT
+nqSmtConflict   = nqBiasIsLong ? nqBearSMT : nqBullSMT
+
+var table statusTbl = table.new(tblPos, 6, 4, border_width = 1)
 if showStatusTable and barstate.islast
-    table.cell(statusTbl, 0, 0, "Session", text_color = color.white, bgcolor = color.new(color.gray, 30))
-    table.cell(statusTbl, 1, 0, sessActive ? sessName : "Inactive", text_color = color.white, bgcolor = color.new(color.gray, 30))
-    table.cell(statusTbl, 0, 1, "Bias", text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(statusTbl, 1, 1, biasLabel, text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(statusTbl, 0, 2, "News", text_color = color.white, bgcolor = color.new(color.gray, 30))
-    table.cell(statusTbl, 1, 2, newsStateLabel + (activeNewsTag != "" ? " (" + activeNewsTag + ")" : ""), text_color = color.white, bgcolor = color.new(color.gray, 30))
-    table.cell(statusTbl, 0, 3, "NY KZ", text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(statusTbl, 1, 3, inNYKillZone ? "Active" : "Outside", text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(statusTbl, 0, 4, "Asia KZ", text_color = color.white, bgcolor = color.new(color.gray, 30))
-    table.cell(statusTbl, 1, 4, inAsiaKillZone ? "Active" : "Outside", text_color = color.white, bgcolor = color.new(color.gray, 30))
-    table.cell(statusTbl, 0, 5, "15m Setup", text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(statusTbl, 1, 5, canEnter15m ? (confLong_15m ? "Long Ready" : confShort_15m ? "Short Ready" : "Forming") : "—", text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(statusTbl, 0, 6, "5m Setup", text_color = color.white, bgcolor = color.new(color.gray, 30))
-    table.cell(statusTbl, 1, 6, canEnter5m ? (confLong_5m ? "Long Ready" : confShort_5m ? "Short Ready" : "Forming") : "—", text_color = color.white, bgcolor = color.new(color.gray, 30))
+    sessionCellTxt = "Sess: " + (sessActive ? sessName : "None") + (inNYKillZone ? " [NYKZ]" : inAsiaKillZone ? " [AsiaKZ]" : "")
+    anchorCellTxt  = "Next 4H: " + f_fmtCountdown(minsToNextAnchor) + (inMacroWindow ? " (macro)" : "")
+    newsCellTxt    = "News: " + newsStateLabel + (na(nextNewsMins) ? "" : " (" + f_fmtCountdown(nextNewsMins) + " " + nextNewsLabel + ")")
+    table.cell(statusTbl, 0, 0, sessionCellTxt, text_color = color.white, bgcolor = color.new(color.gray, 30), text_size = tblSz)
+    table.merge_cells(statusTbl, 0, 0, 1, 0)
+    table.cell(statusTbl, 2, 0, anchorCellTxt, text_color = color.white, bgcolor = color.new(color.gray, 30), text_size = tblSz)
+    table.merge_cells(statusTbl, 2, 0, 3, 0)
+    table.cell(statusTbl, 4, 0, newsCellTxt, text_color = color.white, bgcolor = color.new(color.gray, 30), text_size = tblSz)
+    table.merge_cells(statusTbl, 4, 0, 5, 0)
+
+    table.cell(statusTbl, 0, 1, "Symbol", text_color = color.white, bgcolor = color.new(color.gray, 50), text_size = tblSz)
+    table.cell(statusTbl, 1, 1, "HTF Bias+Draw", text_color = color.white, bgcolor = color.new(color.gray, 50), text_size = tblSz)
+    table.cell(statusTbl, 2, 1, "POI", text_color = color.white, bgcolor = color.new(color.gray, 50), text_size = tblSz)
+    table.cell(statusTbl, 3, 1, "Sweep", text_color = color.white, bgcolor = color.new(color.gray, 50), text_size = tblSz)
+    table.cell(statusTbl, 4, 1, "Confirm", text_color = color.white, bgcolor = color.new(color.gray, 50), text_size = tblSz)
+    table.cell(statusTbl, 5, 1, "SMT", text_color = color.white, bgcolor = color.new(color.gray, 50), text_size = tblSz)
+
+    table.cell(statusTbl, 0, 2, "ES", text_color = color.white, bgcolor = color.new(color.gray, 30), text_size = tblSz)
+    table.cell(statusTbl, 1, 2, f_biasCellText(esBiasIsLong, esH, esL), text_color = color.white, bgcolor = color.new(color.green, 70), text_size = tblSz)
+    table.cell(statusTbl, 2, 2, f_poiCellText(esBiasIsLong, esPoiTop15, esPoiBot15, esPoiTop5, esPoiBot5), text_color = color.white, bgcolor = f_poiCellColor(esBiasIsLong, esPoiTop15, esPoiBot15, esPoiTop5, esPoiBot5), text_size = tblSz)
+    table.cell(statusTbl, 3, 2, f_sweepCellText(esBiasIsLong, esSwept, esManipLow, esManipHigh, esSessName), text_color = color.white, bgcolor = esSwept ? color.new(color.green, 70) : color.new(color.gray, 50), text_size = tblSz)
+    table.cell(statusTbl, 4, 2, esConfText, text_color = color.white, bgcolor = esConfValid ? color.new(color.green, 70) : color.new(color.gray, 50), text_size = tblSz)
+    table.cell(statusTbl, 5, 2, f_smtCellText(esSmtSupportive, esSmtConflict), text_color = color.white, bgcolor = esSmtSupportive ? color.new(color.green, 70) : esSmtConflict ? color.new(color.orange, 70) : color.new(color.gray, 50), text_size = tblSz)
+
+    table.cell(statusTbl, 0, 3, "NQ", text_color = color.white, bgcolor = color.new(color.gray, 30), text_size = tblSz)
+    table.cell(statusTbl, 1, 3, f_biasCellText(nqBiasIsLong, nqH, nqL), text_color = color.white, bgcolor = color.new(color.green, 70), text_size = tblSz)
+    table.cell(statusTbl, 2, 3, f_poiCellText(nqBiasIsLong, nqPoiTop15, nqPoiBot15, nqPoiTop5, nqPoiBot5), text_color = color.white, bgcolor = f_poiCellColor(nqBiasIsLong, nqPoiTop15, nqPoiBot15, nqPoiTop5, nqPoiBot5), text_size = tblSz)
+    table.cell(statusTbl, 3, 3, f_sweepCellText(nqBiasIsLong, nqSwept, nqManipLow, nqManipHigh, nqSessName), text_color = color.white, bgcolor = nqSwept ? color.new(color.green, 70) : color.new(color.gray, 50), text_size = tblSz)
+    table.cell(statusTbl, 4, 3, nqConfText, text_color = color.white, bgcolor = nqConfValid ? color.new(color.green, 70) : color.new(color.gray, 50), text_size = tblSz)
+    table.cell(statusTbl, 5, 3, f_smtCellText(nqSmtSupportive, nqSmtConflict), text_color = color.white, bgcolor = nqSmtSupportive ? color.new(color.green, 70) : nqSmtConflict ? color.new(color.orange, 70) : color.new(color.gray, 50), text_size = tblSz)
 
 // ---------------------------------------------------------------------------
 // Notes / known limitations (kept as comments, not invented behavior):
@@ -619,4 +842,15 @@ if showStatusTable and barstate.islast
 //    event's actual value; direction is never auto-derived from news.
 //  - Avoid-day toggles (FOMC/CPI/holiday) are plain manual switches — Pine
 //    has no calendar awareness, so you flip these on for the relevant day.
+//  - ES/NQ table POI column shows the nearest UNMITIGATED 15m/5m FVG only;
+//    f_poiEngine() already drops mitigated levels internally, so a true
+//    "tapped" state is not tracked and is not fabricated here.
+//  - f_sessionEngine() and the ES/NQ SMT pair (esBullSMT/esBearSMT/...) are
+//    request.security-callable extensions of the existing chart-TF session
+//    state machine and SMT pattern — same math, run per ES/NQ symbol instead
+//    of the chart's own symbol, kept fully separate from the original
+//    chart-TF gating variables (sessActive, smtOkLong/smtOkShort, etc.).
+//  - The table's Session/Next 4H/News strip (row 0-1) is global and shared
+//    across both symbol columns; it is not duplicated per-symbol because
+//    session/news timing is identical for ES and NQ.
 // ---------------------------------------------------------------------------
