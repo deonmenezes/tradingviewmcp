@@ -456,31 +456,33 @@ nqBiasIsLong = f_dailyBias(nqH, nqL, nqC)
 [nqClose15, nqClosePrev15] = request.security(nqSymbol, sigTF15, [close, close[1]], lookahead = barmerge.lookahead_off)  // NON-REPAINTING
 [nqClose5,  nqClosePrev5]  = request.security(nqSymbol, sigTF5,  [close, close[1]], lookahead = barmerge.lookahead_off)  // NON-REPAINTING
 
+minRunLen = allowSingleCandleCISD ? 1 : 2
+
 // Same close-vs-level crossing formula already used by tier1Long_chart/_1h/
 // etc. above, generalized into a function so it isn't retyped per symbol/TF.
 f_tier1Confirm(_poi, _c, _cPrev, _isLong) =>
     _isLong ? (not na(_poi) and _c > _poi and _cPrev <= _poi) : (not na(_poi) and _c < _poi and _cPrev >= _poi)
 
-f_tier2Confirm(_runOpen, _runLen, _c, _cPrev, _isLong) =>
-    not na(_runOpen) and _runLen >= minRunLen and (_isLong ? (_c > _runOpen and _cPrev <= _runOpen) : (_c < _runOpen and _cPrev >= _runOpen))
+f_tier2Confirm(_runOpen, _runLen, _c, _cPrev, _isLong, _minRunLen) =>
+    not na(_runOpen) and _runLen >= _minRunLen and (_isLong ? (_c > _runOpen and _cPrev <= _runOpen) : (_c < _runOpen and _cPrev >= _runOpen))
 
 esT1_15L = f_tier1Confirm(esPoiTop15, esClose15, esClosePrev15, true)
 esT1_15S = f_tier1Confirm(esPoiBot15, esClose15, esClosePrev15, false)
 esT1_5L  = f_tier1Confirm(esPoiTop5,  esClose5,  esClosePrev5,  true)
 esT1_5S  = f_tier1Confirm(esPoiBot5,  esClose5,  esClosePrev5,  false)
-esT2_15L = f_tier2Confirm(esCisdDown15, esCisdDownLen15, esClose15, esClosePrev15, true)
-esT2_15S = f_tier2Confirm(esCisdUp15,   esCisdUpLen15,   esClose15, esClosePrev15, false)
-esT2_5L  = f_tier2Confirm(esCisdDown5,  esCisdDownLen5,  esClose5,  esClosePrev5,  true)
-esT2_5S  = f_tier2Confirm(esCisdUp5,    esCisdUpLen5,    esClose5,  esClosePrev5,  false)
+esT2_15L = f_tier2Confirm(esCisdDown15, esCisdDownLen15, esClose15, esClosePrev15, true, minRunLen)
+esT2_15S = f_tier2Confirm(esCisdUp15,   esCisdUpLen15,   esClose15, esClosePrev15, false, minRunLen)
+esT2_5L  = f_tier2Confirm(esCisdDown5,  esCisdDownLen5,  esClose5,  esClosePrev5,  true, minRunLen)
+esT2_5S  = f_tier2Confirm(esCisdUp5,    esCisdUpLen5,    esClose5,  esClosePrev5,  false, minRunLen)
 
 nqT1_15L = f_tier1Confirm(nqPoiTop15, nqClose15, nqClosePrev15, true)
 nqT1_15S = f_tier1Confirm(nqPoiBot15, nqClose15, nqClosePrev15, false)
 nqT1_5L  = f_tier1Confirm(nqPoiTop5,  nqClose5,  nqClosePrev5,  true)
 nqT1_5S  = f_tier1Confirm(nqPoiBot5,  nqClose5,  nqClosePrev5,  false)
-nqT2_15L = f_tier2Confirm(nqCisdDown15, nqCisdDownLen15, nqClose15, nqClosePrev15, true)
-nqT2_15S = f_tier2Confirm(nqCisdUp15,   nqCisdUpLen15,   nqClose15, nqClosePrev15, false)
-nqT2_5L  = f_tier2Confirm(nqCisdDown5,  nqCisdDownLen5,  nqClose5,  nqClosePrev5,  true)
-nqT2_5S  = f_tier2Confirm(nqCisdUp5,    nqCisdUpLen5,    nqClose5,  nqClosePrev5,  false)
+nqT2_15L = f_tier2Confirm(nqCisdDown15, nqCisdDownLen15, nqClose15, nqClosePrev15, true, minRunLen)
+nqT2_15S = f_tier2Confirm(nqCisdUp15,   nqCisdUpLen15,   nqClose15, nqClosePrev15, false, minRunLen)
+nqT2_5L  = f_tier2Confirm(nqCisdDown5,  nqCisdDownLen5,  nqClose5,  nqClosePrev5,  true, minRunLen)
+nqT2_5S  = f_tier2Confirm(nqCisdUp5,    nqCisdUpLen5,    nqClose5,  nqClosePrev5,  false, minRunLen)
 
 // SMT for the table: same swing-divergence formula as smtBearishAtHigh/
 // smtBullishAtLow above, generalized to the explicit ES/NQ pairing (instead
@@ -530,8 +532,6 @@ tier1Short_5m  = not na(poiBotShort5m)  and close < poiBotShort5m  and close[1] 
 // via request.security above) — no separate run-tracking state exists.
 // ---------------------------------------------------------------------------
 [lastDownOpenChart, lastDownLenChart, lastUpOpenChart, lastUpLenChart] = f_cisdEngine()
-
-minRunLen = allowSingleCandleCISD ? 1 : 2
 
 tier2Long  = not na(lastDownOpenChart) and lastDownLenChart >= minRunLen and close > lastDownOpenChart and close[1] <= lastDownOpenChart
 tier2Short = not na(lastUpOpenChart)   and lastUpLenChart   >= minRunLen and close < lastUpOpenChart   and close[1] >= lastUpOpenChart
