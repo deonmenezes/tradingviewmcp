@@ -27,6 +27,7 @@ class TradeRecord:
     win: bool
     mfe_r: float
     mae_r: float
+    smt_present: bool | None = None
 
 
 def _simulate_trade(
@@ -123,6 +124,7 @@ def _simulate_trade(
         win=realized_r > 0,
         mfe_r=float(mfe_r),
         mae_r=float(mae_r),
+        smt_present=setup.smt_present,
     )
 
 
@@ -153,6 +155,7 @@ class BacktestResult:
                     "win": t.win,
                     "mfe_r": t.mfe_r,
                     "mae_r": t.mae_r,
+                    "smt_present": t.smt_present,
                 }
             )
         return pd.DataFrame(rows)
@@ -174,9 +177,27 @@ def run_backtest(
 
     result = BacktestResult()
 
+    trades_today = 0
+    losses_today = 0
+    current_date = None
+
     for session_open in session_opens:
+        local_date = session_open.tz_convert(cfg.session.timezone).date()
+        if local_date != current_date:
+            current_date = local_date
+            trades_today = 0
+            losses_today = 0
+
+        if (
+            trades_today >= cfg.limits.max_trades_per_day
+            or losses_today >= cfg.limits.max_losses_per_day
+        ):
+            continue
+
         window_end = session_open + pd.Timedelta(minutes=cfg.session.session_cutoff_minutes + 60)
         frames_1m = {"primary": primary_1m[primary_1m.index <= window_end]}
+        if correlated_1m is not None:
+            frames_1m["correlated"] = correlated_1m[correlated_1m.index <= window_end]
         bias_frames = {"daily": daily, "weekly": weekly, "30min": bars_30m}
 
         setup = det.detect_session_setup(cfg, session_open, frames_1m, bias_frames)
@@ -195,5 +216,8 @@ def run_backtest(
         trade = _simulate_trade(setup, after, cfg)
         if trade is not None:
             result.trades.append(trade)
+            trades_today += 1
+            if not trade.win:
+                losses_today += 1
 
     return result

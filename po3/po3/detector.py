@@ -41,6 +41,7 @@ class SetupResult:
     stop: float | None = None
     targets: list[float] = field(default_factory=list)
     manipulation_extreme: float | None = None
+    smt_present: bool | None = None  # tagged only; gates entry only if cfg.confirmation.smt_required
 
     def explain(self) -> str:
         lines = [f"Session open: {self.session_open} | taken={self.taken}"]
@@ -199,7 +200,8 @@ def detect_session_setup(
     """Evaluate one 4H session open and return whether/how a setup formed.
 
     frames_1m must contain at least key "primary" (e.g. NQ 1m bars covering
-    the session window and lookback). bias_frames should contain "daily",
+    the session window and lookback), and optionally "correlated" (e.g. ES,
+    for SMT divergence tagging). bias_frames should contain "daily",
     optionally "weekly" and "30min", covering history up to session_open.
     """
     result = SetupResult(session_open=session_open, direction=None, taken=False)
@@ -285,6 +287,23 @@ def detect_session_setup(
                 post_open.loc[sweep_ts, "low" if direction == "long" else "high"]
             )
     result.manipulation_extreme = manipulation_extreme
+
+    correlated = frames_1m.get("correlated")
+    if correlated is not None and not correlated.empty:
+        correlated_window = correlated[(correlated.index >= session_open) & (correlated.index <= cutoff)]
+        smt_at = "low" if direction == "long" else "high"
+        result.smt_present = prim.smt_divergence(post_open, correlated_window, at=smt_at)
+        result.gates.append(
+            GateResult(
+                "smt_divergence",
+                True if not cfg.confirmation.smt_required else bool(result.smt_present),
+                f"present={result.smt_present} (tagged only" + (
+                    ")" if not cfg.confirmation.smt_required else ", required to enter)"
+                ),
+            )
+        )
+        if cfg.confirmation.smt_required and not result.smt_present:
+            return result
 
     tier, confirm_ts = confirm_entry(cfg, post_open, direction, poi, br.clarity)
     result.gates.append(

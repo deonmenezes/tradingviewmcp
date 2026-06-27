@@ -8,11 +8,56 @@ timeframe boundary in this strategy depends on the 18:00-ET session open.
 
 from __future__ import annotations
 
+import warnings
+
 import pandas as pd
 
 from po3.config import SessionConfig
 
 REQUIRED_COLUMNS = ("open", "high", "low", "close", "volume")
+
+
+def validate_alignment(primary: pd.DataFrame, correlated: pd.DataFrame, max_misaligned_pct: float = 1.0) -> None:
+    """Warn (not raise) if primary/correlated 1m bars aren't minute-aligned.
+
+    SMT divergence compares bar-for-bar; silently misaligned timestamps would
+    quietly compare the wrong candles. ``max_misaligned_pct`` is the percent
+    of primary bars allowed to have no matching correlated timestamp before
+    we warn (a few missing bars from feed gaps are normal).
+    """
+    shared = primary.index.intersection(correlated.index)
+    if len(primary) == 0:
+        return
+    missing_pct = 100.0 * (1.0 - len(shared) / len(primary))
+    if missing_pct > max_misaligned_pct:
+        warnings.warn(
+            f"primary/correlated 1m bars are only {100 - missing_pct:.1f}% "
+            f"minute-aligned ({missing_pct:.1f}% of primary timestamps have no "
+            "matching correlated bar) — SMT divergence tags may be comparing "
+            "misaligned candles. Check feed alignment before trusting SMT output.",
+            stacklevel=2,
+        )
+
+
+def detect_abnormal_jumps(
+    df: pd.DataFrame, max_jump_pct: float = 8.0, label: str = "series"
+) -> pd.DataFrame:
+    """Flag bar-to-bar close jumps larger than ``max_jump_pct`` — a common
+    signature of contract-roll stitching artifacts (back-adjusted/continuous
+    data splicing in a price gap). Returns the flagged rows; only warns, does
+    not modify or drop data, since a real large move is also possible.
+    """
+    pct_change = df["close"].pct_change().abs() * 100.0
+    flagged = df[pct_change > max_jump_pct]
+    if not flagged.empty:
+        warnings.warn(
+            f"{label}: {len(flagged)} bar(s) with >{max_jump_pct}% close-to-close "
+            "jump detected — possible contract-roll stitching artifact (false "
+            f"wick/gap). First flagged timestamp: {flagged.index[0]}. Inspect "
+            "before trusting backtest results around these bars.",
+            stacklevel=2,
+        )
+    return flagged
 
 
 def load_ohlcv_csv(path: str, tz: str = "UTC") -> pd.DataFrame:

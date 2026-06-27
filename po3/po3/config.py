@@ -25,7 +25,9 @@ class SessionConfig:
     timezone: str = "America/New_York"
     session_open_hour: int = 18  # 18:00 ET daily session open
     four_hour_opens: tuple[int, ...] = (18, 22, 2, 6, 10, 14)
-    tradeable_opens: tuple[int, ...] = (10, 14)
+    # NY tradeable opens: 10:00 & 14:00 ET. Asia tradeable opens: 22:00 & 02:00
+    # ET (Asia boundaries are the tunable ones per the source material).
+    tradeable_opens: tuple[int, ...] = (10, 14, 22, 2)
     macro_window_minutes: int = 10  # last N min + first N min of each clock hour
     session_cutoff_minutes: int = 150  # stand down if no entry within N min of open
 
@@ -37,6 +39,15 @@ class RiskConfig:
     trim_r_multiples: tuple[float, ...] = (1.0, 2.0, 3.0)
     tighten_stop_to_order_block: bool = False
     allow_single_candle_cisd: bool = False
+    risk_per_trade_pct: float = 0.5  # account % risked per trade, for $/equity conversion
+
+
+@dataclass(frozen=True)
+class TradingLimitsConfig:
+    """Daily circuit breakers — enforced chronologically in the backtest."""
+
+    max_trades_per_day: int = 2
+    max_losses_per_day: int = 2
 
 
 @dataclass(frozen=True)
@@ -51,10 +62,14 @@ class POIConfig:
 
 @dataclass(frozen=True)
 class ConfirmationConfig:
-    """Entry confirmation tier selection (§4.4)."""
+    """Entry confirmation tier selection (§4.4). Tier1 (IFVG) is tried
+    first, falling back to Tier2 (CISD) — i.e. "either" is satisfied —
+    matching the source material's confirmation rule.
+    """
 
     require_tier3_when_mixed_bias: bool = True
-    smt_required: bool = False  # optional confluence, off by default
+    smt_required: bool = False  # optional confluence: computed & tagged on every
+    # setup regardless of this flag; only gates entry if explicitly set True.
 
 
 @dataclass(frozen=True)
@@ -107,6 +122,7 @@ class Config:
     scoring: ScoringWeights = field(default_factory=ScoringWeights)
     calendar: CalendarConfig = field(default_factory=CalendarConfig)
     experimental: ExperimentalConfig = field(default_factory=ExperimentalConfig)
+    limits: TradingLimitsConfig = field(default_factory=TradingLimitsConfig)
     bias_mode: BiasMode = "auto"
     smt_asset: str | None = "ES"
 

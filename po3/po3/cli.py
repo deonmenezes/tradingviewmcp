@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 import sys
 
+import pandas as pd
+
 from po3 import data as data_mod
+from po3 import monte_carlo as mc_mod
 from po3 import report
 from po3 import stats as stats_mod
 from po3.backtest import run_backtest
@@ -21,6 +24,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out-dir", default="po3_output")
     p.add_argument("--explain", action="store_true", help="Print explain trail for sessions")
     p.add_argument("--explain-limit", type=int, default=10)
+    p.add_argument(
+        "--start-date",
+        default=None,
+        help="ISO date (e.g. 2024-06-01); defaults to 12 months before the data's last bar",
+    )
+    p.add_argument(
+        "--end-date",
+        default=None,
+        help="ISO date (e.g. 2025-06-01); defaults to the data's last bar",
+    )
+    p.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="Mark this run as pipeline validation only (synthetic/sample data) "
+        "and label all printed output accordingly",
+    )
+    p.add_argument("--monte-carlo", action="store_true", help="Run a bootstrap Monte Carlo over the trade log")
+    p.add_argument("--mc-simulations", type=int, default=5000)
+    p.add_argument("--mc-seed", type=int, default=None)
     return p
 
 
@@ -35,6 +57,27 @@ def main(argv: list[str] | None = None) -> int:
         if args.correlated_csv
         else None
     )
+
+    data_mod.detect_abnormal_jumps(primary_1m, label="primary")
+    if correlated_1m is not None:
+        data_mod.detect_abnormal_jumps(correlated_1m, label="correlated")
+        data_mod.validate_alignment(primary_1m, correlated_1m)
+
+    end_date = pd.Timestamp(args.end_date, tz="UTC") if args.end_date else primary_1m.index[-1]
+    start_date = (
+        pd.Timestamp(args.start_date, tz="UTC") if args.start_date else end_date - pd.DateOffset(months=12)
+    )
+    primary_1m = primary_1m[(primary_1m.index >= start_date) & (primary_1m.index <= end_date)]
+    if correlated_1m is not None:
+        correlated_1m = correlated_1m[(correlated_1m.index >= start_date) & (correlated_1m.index <= end_date)]
+
+    if args.synthetic:
+        print(
+            "=== SYNTHETIC DATA RUN — pipeline validation only ===\n"
+            "Results below come from randomly generated sample data and prove "
+            "nothing about real strategy performance. They only confirm the "
+            "loader -> detector -> backtest -> stats pipeline runs end-to-end.\n"
+        )
 
     result = run_backtest(cfg, primary_1m, correlated_1m)
 
@@ -62,12 +105,38 @@ def main(argv: list[str] | None = None) -> int:
         print("\n=== Explain (first sessions) ===")
         print(report.explain_sessions(result.setups, args.explain_limit))
 
+    if args.monte_carlo:
+        print("\n=== Monte Carlo (bootstrap resample of realized R-multiples) ===")
+        if trade_df.empty:
+            print("No trades to resample.")
+        else:
+            mc_result = mc_mod.run_monte_carlo(
+                trade_df,
+                risk_per_trade_pct=cfg.risk.risk_per_trade_pct,
+                n_simulations=args.mc_simulations,
+                seed=args.mc_seed,
+            )
+            for k, v in mc_result.summary().items():
+                print(f"{k}: {v}")
+            print(
+                "\nMonte Carlo caveat: this resamples the trade R-multiples this "
+                "backtest already produced, in random order/combinations. It shows "
+                "variance in the historical sample, not a prediction of future "
+                "performance, and inherits any bias in the underlying backtest."
+            )
+
     print(
         "\nCaveats: small/limited sample size and potential lookahead bias in this "
         "backtest simulation should be assumed until independently verified. These "
         "are measured stats from the rules as implemented, not a claim that the "
         "strategy is profitable."
     )
+    if args.synthetic:
+        print(
+            "\nReminder: the above was run on SYNTHETIC sample data. It validates "
+            "that the pipeline executes correctly — it is not a measurement of "
+            "real-world edge."
+        )
     return 0
 
 
