@@ -17,6 +17,92 @@ from po3.config import SessionConfig
 REQUIRED_COLUMNS = ("open", "high", "low", "close", "volume")
 
 
+class DataValidationError(ValueError):
+    """Raised when loaded data fails a load-time sanity check that must halt
+    the run rather than silently produce an inaccurate backtest."""
+
+
+def validate_strict(df: pd.DataFrame, label: str = "series") -> dict:
+    """Hard validation gate (HALT on failure, per spec §4): duplicate or
+    non-monotonic timestamps, non-positive prices/volume, and missing-minute
+    gaps. Returns a dict of stats for the data-quality report; raises
+    ``DataValidationError`` on anything that would silently corrupt the
+    backtest rather than just costing some coverage.
+    """
+    if df.index.has_duplicates:
+        dupes = df.index[df.index.duplicated()]
+        raise DataValidationError(
+            f"{label}: {len(dupes)} duplicate timestamp(s), e.g. {dupes[0]}. "
+            "Refusing to backtest on data with duplicate bars."
+        )
+    if not df.index.is_monotonic_increasing:
+        raise DataValidationError(f"{label}: timestamps are not strictly increasing.")
+
+    bad_price = (df[["open", "high", "low", "close"]] <= 0).any(axis=None)
+    if bad_price:
+        raise DataValidationError(f"{label}: found zero/negative OHLC price(s).")
+    if (df["volume"] < 0).any():
+        raise DataValidationError(f"{label}: found negative volume.")
+
+    expected_minutes = pd.date_range(df.index[0], df.index[-1], freq="1min")
+    missing_pct = 100.0 * (1.0 - len(df.index) / len(expected_minutes)) if len(expected_minutes) else 0.0
+
+    return {
+        "label": label,
+        "rows": len(df),
+        "start": df.index[0],
+        "end": df.index[-1],
+        "missing_minutes_pct": missing_pct,
+    }
+
+
+def detect_roll_dates(
+    df: pd.DataFrame, max_jump_pct: float = 8.0
+) -> pd.DatetimeIndex:
+    """Identify likely contract-roll dates from large close-to-close jumps,
+    so they can be flagged/excluded per spec §3 rather than silently treated
+    as real price action.
+    """
+    pct_change = df["close"].pct_change().abs() * 100.0
+    flagged = df.index[pct_change > max_jump_pct]
+    return pd.DatetimeIndex(sorted({ts.normalize() for ts in flagged}))
+
+
+def exclude_roll_sessions(
+    df: pd.DataFrame, roll_dates: pd.DatetimeIndex, buffer_hours: int = 24
+) -> pd.DataFrame:
+    """Drop bars within ``buffer_hours`` of a flagged roll date, since FVG/
+    sweep detection can mistake the roll-induced gap for real manipulation.
+    """
+    if len(roll_dates) == 0:
+        return df
+    mask = pd.Series(True, index=df.index)
+    buffer = pd.Timedelta(hours=buffer_hours)
+    for rd in roll_dates:
+        mask &= ~((df.index >= rd - buffer) & (df.index <= rd + buffer))
+    return df[mask]
+
+
+def data_quality_report(
+    primary_stats: dict,
+    correlated_stats: dict | None,
+    roll_dates: pd.DatetimeIndex,
+    alignment_pct: float | None,
+) -> str:
+    lines = ["=== Data Quality Report ==="]
+    for stats in (primary_stats, correlated_stats):
+        if stats is None:
+            continue
+        lines.append(
+            f"{stats['label']}: {stats['rows']} rows, {stats['start']} -> {stats['end']}, "
+            f"missing minutes: {stats['missing_minutes_pct']:.2f}%"
+        )
+    lines.append(f"Roll dates flagged: {len(roll_dates)}" + (f" ({list(roll_dates)})" if len(roll_dates) else ""))
+    if alignment_pct is not None:
+        lines.append(f"NQ/ES minute alignment: {alignment_pct:.2f}%")
+    return "\n".join(lines)
+
+
 def validate_alignment(primary: pd.DataFrame, correlated: pd.DataFrame, max_misaligned_pct: float = 1.0) -> None:
     """Warn (not raise) if primary/correlated 1m bars aren't minute-aligned.
 

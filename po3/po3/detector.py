@@ -314,7 +314,15 @@ def detect_session_setup(
 
     result.confirmation_tier = tier
     result.confirmation_time = confirm_ts
-    entry_price = float(post_open.loc[confirm_ts, "close"])
+    if cfg.risk.fill_mode == "next_open":
+        after_confirm = post_open[post_open.index > confirm_ts]
+        entry_price = (
+            float(after_confirm["open"].iloc[0])
+            if not after_confirm.empty
+            else float(post_open.loc[confirm_ts, "close"])
+        )
+    else:
+        entry_price = float(post_open.loc[confirm_ts, "close"])
     stop = manipulation_extreme
     result.entry = entry_price
     result.stop = stop

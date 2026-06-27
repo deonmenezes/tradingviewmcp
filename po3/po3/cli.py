@@ -43,6 +43,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--monte-carlo", action="store_true", help="Run a bootstrap Monte Carlo over the trade log")
     p.add_argument("--mc-simulations", type=int, default=5000)
     p.add_argument("--mc-seed", type=int, default=None)
+    p.add_argument(
+        "--fill-mode",
+        choices=["confirmation_close", "next_open"],
+        default="confirmation_close",
+        help="Entry fill: confirmation bar's close, or the next bar's open",
+    )
+    p.add_argument(
+        "--exclude-roll-sessions",
+        action="store_true",
+        help="Drop bars within 24h of a detected contract-roll date instead of just flagging them",
+    )
+    p.add_argument(
+        "--max-jump-pct",
+        type=float,
+        default=8.0,
+        help="Bar-to-bar close jump %% threshold used to flag/exclude roll dates",
+    )
     return p
 
 
@@ -50,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     cfg = Config(bias_mode=args.bias) if args.bias != DEFAULT_CONFIG.bias_mode else DEFAULT_CONFIG
+    if args.fill_mode != cfg.risk.fill_mode:
+        from dataclasses import replace
+
+        cfg = replace(cfg, risk=replace(cfg.risk, fill_mode=args.fill_mode))
 
     primary_1m = data_mod.load_ohlcv_csv(args.primary_csv, tz=args.input_tz)
     correlated_1m = (
@@ -58,10 +79,31 @@ def main(argv: list[str] | None = None) -> int:
         else None
     )
 
-    data_mod.detect_abnormal_jumps(primary_1m, label="primary")
+    try:
+        primary_stats = data_mod.validate_strict(primary_1m, label="primary")
+        correlated_stats = (
+            data_mod.validate_strict(correlated_1m, label="correlated") if correlated_1m is not None else None
+        )
+    except data_mod.DataValidationError as exc:
+        print(f"FATAL data validation error — refusing to run backtest: {exc}", file=sys.stderr)
+        return 1
+
+    data_mod.detect_abnormal_jumps(primary_1m, max_jump_pct=args.max_jump_pct, label="primary")
+    roll_dates = data_mod.detect_roll_dates(primary_1m, max_jump_pct=args.max_jump_pct)
+    if args.exclude_roll_sessions and len(roll_dates) > 0:
+        primary_1m = data_mod.exclude_roll_sessions(primary_1m, roll_dates)
+
+    alignment_pct = None
     if correlated_1m is not None:
-        data_mod.detect_abnormal_jumps(correlated_1m, label="correlated")
+        data_mod.detect_abnormal_jumps(correlated_1m, max_jump_pct=args.max_jump_pct, label="correlated")
         data_mod.validate_alignment(primary_1m, correlated_1m)
+        shared = primary_1m.index.intersection(correlated_1m.index)
+        alignment_pct = 100.0 * len(shared) / len(primary_1m) if len(primary_1m) else 0.0
+        if args.exclude_roll_sessions and len(roll_dates) > 0:
+            correlated_1m = data_mod.exclude_roll_sessions(correlated_1m, roll_dates)
+
+    print(data_mod.data_quality_report(primary_stats, correlated_stats, roll_dates, alignment_pct))
+    print()
 
     end_date = pd.Timestamp(args.end_date, tz="UTC") if args.end_date else primary_1m.index[-1]
     start_date = (

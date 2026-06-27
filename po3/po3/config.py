@@ -40,6 +40,7 @@ class RiskConfig:
     tighten_stop_to_order_block: bool = False
     allow_single_candle_cisd: bool = False
     risk_per_trade_pct: float = 0.5  # account % risked per trade, for $/equity conversion
+    fill_mode: Literal["confirmation_close", "next_open"] = "confirmation_close"
 
 
 @dataclass(frozen=True)
