@@ -428,6 +428,13 @@ f_sessionEngine() =>
 
     [_active, _swept, _manipLow, _manipHigh, _name]
 
+// Intentionally lagging: this reads ONLY the prior completed daily candle
+// and freezes for the entire current session/day. It will commonly disagree
+// with intraday price action (e.g. show Bear while price is pushing up) —
+// that's the PO3 thesis (bias holds, price manipulates against it, then
+// reverses with it), not a live/real-time directional read. It will not
+// flip to Bull just because today's price is bullish; it only flips at the
+// next daily close.
 f_dailyBias(_h, _l, _c) =>
     _range = _h - _l
     _pos   = _range > 0 ? (_c - _l) / _range : 0.5
