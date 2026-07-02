@@ -429,13 +429,13 @@ f_obEngine() =>
 [cisdDownOpen5m,  cisdDownLen5m,  cisdUpOpen5m,  cisdUpLen5m]  = request.security(syminfo.tickerid, sigTF5,  f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
 
 // Order Block gate: price touching an unmitigated OB on 30m or 15m.
-[obLong30m,  obShort30m]  = request.security(syminfo.tickerid, "30",    f_obEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
 [obLong15m,  obShort15m]  = request.security(syminfo.tickerid, sigTF15, f_obEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[obLong5m,   obShort5m]   = request.security(syminfo.tickerid, sigTF5,  f_obEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
 
-obGateLong  = not requireOB or (obLong30m  or obLong15m)
-obGateShort = not requireOB or (obShort30m or obShort15m)
-obTagLong   = obLong15m ? " [15m OB]" : obLong30m  ? " [30m OB]" : ""
-obTagShort  = obShort15m ? " [15m OB]" : obShort30m ? " [30m OB]" : ""
+obGateLong  = not requireOB or (obLong15m  or obLong5m)
+obGateShort = not requireOB or (obShort15m or obShort5m)
+obTagLong   = obLong5m  ? " [5m OB]"  : obLong15m  ? " [15m OB]" : ""
+obTagShort  = obShort5m ? " [5m OB]"  : obShort15m ? " [15m OB]" : ""
 
 // ---------------------------------------------------------------------------
 // Session/sweep state, wrapped for per-symbol use (ES/NQ status table). Same
