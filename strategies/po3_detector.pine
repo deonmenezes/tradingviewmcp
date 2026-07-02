@@ -53,7 +53,9 @@ boxExtendBars  = input.int(40, "FVG Box Extend (bars)", minval = 5, maxval = 200
 
 g_conf = "Confirmation"
 allowSingleCandleCISD = input.bool(false, "Allow Single-Candle CISD (weak, per spec)", group = g_conf)
-requireSweep           = input.bool(true, "Require Liquidity Sweep of Session Extreme First", group = g_conf)
+requireSweep           = input.bool(true,  "Require Liquidity Sweep of Session Extreme First", group = g_conf)
+requireOB              = input.bool(true,  "Require 30m/15m Order Block Touch at Entry", group = g_conf)
+requireQTiming         = input.bool(true,  "Require Quarterly Theory Timing (entry only in Q2/Q3 of session window)", group = g_conf)
 
 g_smt = "SMT (optional confluence)"
 useSMT    = input.bool(false, "Require SMT Divergence Confluence", group = g_smt)
@@ -376,6 +378,48 @@ f_cisdEngine() =>
 
     [_lastDownOpen, _lastDownLen, _lastUpOpen, _lastUpLen]
 
+// ---------------------------------------------------------------------------
+// Order Block engine: the last bearish candle before a bullish FVG is the
+// bullish OB; the last bullish candle before a bearish FVG is the bearish OB.
+// Called via request.security() at 30m and 15m — returns whether price is
+// currently touching an unmitigated OB on that timeframe. When a close fully
+// exits the OB body on the wrong side the OB is considered mitigated.
+// ---------------------------------------------------------------------------
+f_obEngine() =>
+    var float _bullObTop = na
+    var float _bullObBot = na
+    var float _bearObTop = na
+    var float _bearObBot = na
+
+    if low > high[2]  // bullish FVG formed → OB is last bearish candle before it
+        if close[1] < open[1]
+            _bullObTop := open[1]
+            _bullObBot := low[1]
+        else if close[2] < open[2]
+            _bullObTop := open[2]
+            _bullObBot := low[2]
+
+    if high < low[2]  // bearish FVG formed → OB is last bullish candle before it
+        if close[1] > open[1]
+            _bearObTop := high[1]
+            _bearObBot := open[1]
+        else if close[2] > open[2]
+            _bearObTop := high[2]
+            _bearObBot := open[2]
+
+    // Mitigate: body close fully through the OB zone
+    if not na(_bullObBot) and close < _bullObBot
+        _bullObTop := na
+        _bullObBot := na
+    if not na(_bearObTop) and close > _bearObTop
+        _bearObTop := na
+        _bearObBot := na
+
+    // "Touching" = current bar's range overlaps the OB zone (wick entry counts)
+    _inBullOb = not na(_bullObTop) and low <= _bullObTop and high >= _bullObBot
+    _inBearOb = not na(_bearObTop) and high >= _bearObBot and low <= _bearObTop
+    [_inBullOb, _inBearOb]
+
 [poiTopLong1h, poiBotShort1h]   = request.security(syminfo.tickerid, "60", f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
 [poiTopLong30m, poiBotShort30m] = request.security(syminfo.tickerid, "30", f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
 [poiTopLong15m, poiBotShort15m] = request.security(syminfo.tickerid, sigTF15, f_poiEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
@@ -383,6 +427,15 @@ f_cisdEngine() =>
 
 [cisdDownOpen15m, cisdDownLen15m, cisdUpOpen15m, cisdUpLen15m] = request.security(syminfo.tickerid, sigTF15, f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
 [cisdDownOpen5m,  cisdDownLen5m,  cisdUpOpen5m,  cisdUpLen5m]  = request.security(syminfo.tickerid, sigTF5,  f_cisdEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+
+// Order Block gate: price touching an unmitigated OB on 30m or 15m.
+[obLong30m,  obShort30m]  = request.security(syminfo.tickerid, "30",    f_obEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+[obLong15m,  obShort15m]  = request.security(syminfo.tickerid, sigTF15, f_obEngine(), lookahead = barmerge.lookahead_off)  // NON-REPAINTING
+
+obGateLong  = not requireOB or (obLong30m  or obLong15m)
+obGateShort = not requireOB or (obShort30m or obShort15m)
+obTagLong   = obLong15m ? " [15m OB]" : obLong30m  ? " [30m OB]" : ""
+obTagShort  = obShort15m ? " [15m OB]" : obShort30m ? " [30m OB]" : ""
 
 // ---------------------------------------------------------------------------
 // Session/sweep state, wrapped for per-symbol use (ES/NQ status table). Same
@@ -650,26 +703,36 @@ newsBiasOkShort = newsBiasStr != "Lean Long"
 newsStateLabel = avoidDayActive ? "Avoid Day" : inNewsBlackout and not (inNewsCatalyst and allowCatalyst) ? "Blackout" : inNewsCatalyst ? "Catalyst" : "Clear"
 
 // ---------------------------------------------------------------------------
+// Quarterly Theory gate: divide the session window into 4 equal quarters.
+// Q1 = accumulation (too early to enter), Q2 = manipulation (sweep fires here),
+// Q3 = distribution (the ideal entry zone), Q4 = session wind-down (too late).
+// Gate: only allow entries between Q2 start (25%) and Q4 start (75%) of the
+// cutoff window. Signals that would fire in Q1 or Q4 are suppressed.
+barsInSession   = sessActive ? (bar_index - sessOpenBar) : 0
+qtQ2StartBars   = math.round(barsPerCutoff * 0.25)
+qtQ4StartBars   = math.round(barsPerCutoff * 0.75)
+quarterlyGateOk = not requireQTiming or (sessActive and barsInSession >= qtQ2StartBars and barsInSession <= qtQ4StartBars)
+
 // Entry assembly — chart timeframe (original behavior, unchanged gates)
 // ---------------------------------------------------------------------------
 canEnter = sessActive and not sessTaken and (not requireSweep or sessSwept)
 
-longSignal  = canEnter and biasIsLong       and (tier1Long  or tier2Long)  and smtOkLong  and newsGateOk and newsBiasOkLong
-shortSignal = canEnter and (not biasIsLong) and (tier1Short or tier2Short) and smtOkShort and newsGateOk and newsBiasOkShort
+longSignal  = canEnter and biasIsLong       and (tier1Long  or tier2Long)  and smtOkLong  and newsGateOk and newsBiasOkLong  and obGateLong  and quarterlyGateOk
+shortSignal = canEnter and (not biasIsLong) and (tier1Short or tier2Short) and smtOkShort and newsGateOk and newsBiasOkShort and obGateShort and quarterlyGateOk
 
 if longSignal
     sessTaken := true
     stopLevel = na(manipExtreme) ? sessLow : manipExtreme
     line.new(bar_index, stopLevel, bar_index + boxExtendBars, stopLevel, color = color.red, style = line.style_dashed)
-    label.new(bar_index, low, text = "PO3 LONG (" + sessName + ")\n" + (tier1Long ? "IFVG(" + tier1Source + ")" : "CISD"), style = label.style_label_up, color = color.new(color.green, 0), textcolor = color.white, yloc = yloc.belowbar)
-    alert("PO3 LONG | " + sessName + " | chart TF | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel) + " | " + (tier1Long ? "IFVG(" + tier1Source + ")" : "CISD"), alert.freq_once_per_bar)
+    label.new(bar_index, low, text = "PO3 LONG (" + sessName + ")\n" + (tier1Long ? "IFVG(" + tier1Source + ")" : "CISD") + obTagLong, style = label.style_label_up, color = color.new(color.green, 0), textcolor = color.white, yloc = yloc.belowbar)
+    alert("PO3 LONG | " + sessName + " | chart TF | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel) + " | " + (tier1Long ? "IFVG(" + tier1Source + ")" : "CISD") + obTagLong, alert.freq_once_per_bar)
 
 if shortSignal
     sessTaken := true
     stopLevel = na(manipExtreme) ? sessHigh : manipExtreme
     line.new(bar_index, stopLevel, bar_index + boxExtendBars, stopLevel, color = color.red, style = line.style_dashed)
-    label.new(bar_index, high, text = "PO3 SHORT (" + sessName + ")\n" + (tier1Short ? "IFVG(" + tier1Source + ")" : "CISD"), style = label.style_label_down, color = color.new(color.red, 0), textcolor = color.white, yloc = yloc.abovebar)
-    alert("PO3 SHORT | " + sessName + " | chart TF | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel) + " | " + (tier1Short ? "IFVG(" + tier1Source + ")" : "CISD"), alert.freq_once_per_bar)
+    label.new(bar_index, high, text = "PO3 SHORT (" + sessName + ")\n" + (tier1Short ? "IFVG(" + tier1Source + ")" : "CISD") + obTagShort, style = label.style_label_down, color = color.new(color.red, 0), textcolor = color.white, yloc = yloc.abovebar)
+    alert("PO3 SHORT | " + sessName + " | chart TF | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel) + " | " + (tier1Short ? "IFVG(" + tier1Source + ")" : "CISD") + obTagShort, alert.freq_once_per_bar)
 
 // ---------------------------------------------------------------------------
 // Entry assembly — independent 15m / 5m signals. Same session/manipulation
@@ -680,38 +743,38 @@ if shortSignal
 canEnter15m = enable15m and sessActive and not sessTaken15m and (not requireSweep or sessSwept)
 canEnter5m  = enable5m  and sessActive and not sessTaken5m  and (not requireSweep or sessSwept)
 
-longSignal_15m  = canEnter15m and biasIsLong       and confLong_15m  and smtOkLong  and newsGateOk and newsBiasOkLong  and barstate.isconfirmed
-shortSignal_15m = canEnter15m and (not biasIsLong) and confShort_15m and smtOkShort and newsGateOk and newsBiasOkShort and barstate.isconfirmed
-longSignal_5m   = canEnter5m  and biasIsLong       and confLong_5m   and smtOkLong  and newsGateOk and newsBiasOkLong  and barstate.isconfirmed
-shortSignal_5m  = canEnter5m  and (not biasIsLong) and confShort_5m  and smtOkShort and newsGateOk and newsBiasOkShort and barstate.isconfirmed
+longSignal_15m  = canEnter15m and biasIsLong       and confLong_15m  and smtOkLong  and newsGateOk and newsBiasOkLong  and barstate.isconfirmed and obGateLong  and quarterlyGateOk
+shortSignal_15m = canEnter15m and (not biasIsLong) and confShort_15m and smtOkShort and newsGateOk and newsBiasOkShort and barstate.isconfirmed and obGateShort and quarterlyGateOk
+longSignal_5m   = canEnter5m  and biasIsLong       and confLong_5m   and smtOkLong  and newsGateOk and newsBiasOkLong  and barstate.isconfirmed and obGateLong  and quarterlyGateOk
+shortSignal_5m  = canEnter5m  and (not biasIsLong) and confShort_5m  and smtOkShort and newsGateOk and newsBiasOkShort and barstate.isconfirmed and obGateShort and quarterlyGateOk
 
 if longSignal_15m
     sessTaken15m := true
     stopLevel15 = na(manipExtreme) ? sessLow : manipExtreme
     line.new(bar_index, stopLevel15, bar_index + boxExtendBars, stopLevel15, color = color.orange, style = line.style_dotted)
-    label.new(bar_index, low, text = "PO3 15m LONG (" + sessName + ")\n" + confSrc_15m_long + (inNewsCatalyst ? " [NEWS]" : ""), style = label.style_label_up, color = color.new(color.lime, 25), textcolor = color.black, size = size.tiny, yloc = yloc.belowbar)
-    alert("PO3 LONG | " + sessName + " | 15m | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel15) + " | " + confSrc_15m_long, alert.freq_once_per_bar)
+    label.new(bar_index, low, text = "PO3 15m LONG (" + sessName + ")\n" + confSrc_15m_long + obTagLong + (inNewsCatalyst ? " [NEWS]" : ""), style = label.style_label_up, color = color.new(color.lime, 25), textcolor = color.black, size = size.tiny, yloc = yloc.belowbar)
+    alert("PO3 LONG | " + sessName + " | 15m | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel15) + " | " + confSrc_15m_long + obTagLong, alert.freq_once_per_bar)
 
 if shortSignal_15m
     sessTaken15m := true
     stopLevel15 = na(manipExtreme) ? sessHigh : manipExtreme
     line.new(bar_index, stopLevel15, bar_index + boxExtendBars, stopLevel15, color = color.orange, style = line.style_dotted)
-    label.new(bar_index, high, text = "PO3 15m SHORT (" + sessName + ")\n" + confSrc_15m_short + (inNewsCatalyst ? " [NEWS]" : ""), style = label.style_label_down, color = color.new(color.orange, 25), textcolor = color.black, size = size.tiny, yloc = yloc.abovebar)
-    alert("PO3 SHORT | " + sessName + " | 15m | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel15) + " | " + confSrc_15m_short, alert.freq_once_per_bar)
+    label.new(bar_index, high, text = "PO3 15m SHORT (" + sessName + ")\n" + confSrc_15m_short + obTagShort + (inNewsCatalyst ? " [NEWS]" : ""), style = label.style_label_down, color = color.new(color.orange, 25), textcolor = color.black, size = size.tiny, yloc = yloc.abovebar)
+    alert("PO3 SHORT | " + sessName + " | 15m | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel15) + " | " + confSrc_15m_short + obTagShort, alert.freq_once_per_bar)
 
 if longSignal_5m
     sessTaken5m := true
     stopLevel5 = na(manipExtreme) ? sessLow : manipExtreme
     line.new(bar_index, stopLevel5, bar_index + boxExtendBars, stopLevel5, color = color.aqua, style = line.style_dotted)
-    label.new(bar_index, low, text = "PO3 5m LONG (" + sessName + ")\n" + confSrc_5m_long + (inNewsCatalyst ? " [NEWS]" : ""), style = label.style_label_up, color = color.new(color.aqua, 25), textcolor = color.black, size = size.tiny, yloc = yloc.belowbar)
-    alert("PO3 LONG | " + sessName + " | 5m | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel5) + " | " + confSrc_5m_long, alert.freq_once_per_bar)
+    label.new(bar_index, low, text = "PO3 5m LONG (" + sessName + ")\n" + confSrc_5m_long + obTagLong + (inNewsCatalyst ? " [NEWS]" : ""), style = label.style_label_up, color = color.new(color.aqua, 25), textcolor = color.black, size = size.tiny, yloc = yloc.belowbar)
+    alert("PO3 LONG | " + sessName + " | 5m | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel5) + " | " + confSrc_5m_long + obTagLong, alert.freq_once_per_bar)
 
 if shortSignal_5m
     sessTaken5m := true
     stopLevel5 = na(manipExtreme) ? sessHigh : manipExtreme
     line.new(bar_index, stopLevel5, bar_index + boxExtendBars, stopLevel5, color = color.fuchsia, style = line.style_dotted)
-    label.new(bar_index, high, text = "PO3 5m SHORT (" + sessName + ")\n" + confSrc_5m_short + (inNewsCatalyst ? " [NEWS]" : ""), style = label.style_label_down, color = color.new(color.fuchsia, 25), textcolor = color.black, size = size.tiny, yloc = yloc.abovebar)
-    alert("PO3 SHORT | " + sessName + " | 5m | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel5) + " | " + confSrc_5m_short, alert.freq_once_per_bar)
+    label.new(bar_index, high, text = "PO3 5m SHORT (" + sessName + ")\n" + confSrc_5m_short + obTagShort + (inNewsCatalyst ? " [NEWS]" : ""), style = label.style_label_down, color = color.new(color.fuchsia, 25), textcolor = color.black, size = size.tiny, yloc = yloc.abovebar)
+    alert("PO3 SHORT | " + sessName + " | 5m | entry " + str.tostring(close) + " | stop " + str.tostring(stopLevel5) + " | " + confSrc_5m_short + obTagShort, alert.freq_once_per_bar)
 
 // ---------------------------------------------------------------------------
 // Alerts: a small fixed set of alertcondition()s for the Create Alert dialog
