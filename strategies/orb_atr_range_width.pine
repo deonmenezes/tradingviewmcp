@@ -1,0 +1,162 @@
+//@version=6
+// =============================================================================
+// Opening Range Breakout — ATR-Normalized Range-Width Filter
+// =============================================================================
+// Instrument-agnostic ORB intended to transfer cleanly between equities and
+// futures (ES, NQ, etc.) without per-symbol recalibration.
+//
+// Why ATR instead of a flat-point or %-of-price width threshold:
+//   - ES and NQ sit at very different price levels with different point/tick
+//     values, so a flat point or % threshold tuned on one instrument never
+//     calibrates correctly for the other.
+//   - ATR is already expressed in each instrument's own points, so the same
+//     `k` constant works for both ES and NQ without manual conversion, and it
+//     stays valid as price drifts (e.g. NQ rallying 15k -> 20k does not
+//     silently break a hardcoded point threshold).
+//
+// Range-width gate:  OR_width >= k * ATR(20, daily)
+//   Backtest `k` starting in the 0.15 - 0.30 band.
+//
+// The other filters (volume SMA, 3-bar proximity guard, PO3 bias) are already
+// instrument-agnostic and carry over unchanged.
+//
+// Implementation note: ATR normalization is centralized in get_atr() so the
+// same helper can be reused if ATR-scaling is later extended to the PO3
+// stop / wick logic, keeping normalization consistent across the strategy.
+// =============================================================================
+
+strategy("ORB ATR Range-Width", overlay=true, pyramiding=0,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     calc_on_every_tick=false, process_orders_on_close=true)
+
+// ----------------------------------------------------------------------------
+// Inputs
+// ----------------------------------------------------------------------------
+grpOR   = "Opening Range"
+orSess  = input.session("0930-0945", "Opening range window", group=grpOR)
+tz      = input.string("America/New_York", "Session timezone", group=grpOR)
+
+grpW    = "Range-Width Filter (ATR-normalized)"
+atrLen  = input.int(20, "ATR length", minval=1, group=grpW)
+atrTf   = input.timeframe("D", "ATR timeframe", group=grpW)
+k       = input.float(0.20, "Width multiplier k  (OR_width >= k * ATR)",
+     minval=0.05, maxval=1.0, step=0.01, group=grpW,
+     tooltip="Backtest starting in the 0.15 - 0.30 band. Same k works across ES/NQ because ATR is in each instrument's own points.")
+
+grpVol  = "Volume Filter"
+useVol  = input.bool(true, "Require breakout volume confirmation", group=grpVol)
+volLen  = input.int(20, "Volume SMA length", minval=1, group=grpVol)
+volMult = input.float(1.0, "Volume SMA multiplier", minval=0.1, step=0.1, group=grpVol)
+
+grpProx = "Proximity Guard"
+useProx = input.bool(true, "Require fresh breakout (proximity guard)", group=grpProx)
+proxBars = input.int(3, "Lookback bars", minval=1, group=grpProx,
+     tooltip="Reject the signal if price already closed beyond the level within the prior N bars (filters chop / re-tests).")
+
+grpPO3  = "PO3 Bias"
+usePO3  = input.bool(true, "Require PO3 (manipulation-sweep) bias", group=grpPO3,
+     tooltip="Long only after a sweep below OR low; short only after a sweep above OR high (Judas-swing accumulation -> manipulation -> distribution).")
+
+grpRisk = "Risk (ATR-normalized)"
+stopMult = input.float(1.0, "Stop = ATR * mult", minval=0.1, step=0.1, group=grpRisk)
+rr       = input.float(2.0, "Reward : Risk", minval=0.1, step=0.1, group=grpRisk)
+oneTrade = input.bool(true, "Max one trade per session", group=grpRisk)
+
+// ----------------------------------------------------------------------------
+// Shared ATR utility — single source of truth for ATR normalization.
+// Keeps the width gate, stop sizing, and any future PO3 stop/wick logic on the
+// same units so the same constants transfer across instruments.
+// ----------------------------------------------------------------------------
+get_atr(simple int len, simple string tf) =>
+    request.security(syminfo.tickerid, tf, ta.atr(len), lookahead=barmerge.lookahead_off)
+
+dailyAtr = get_atr(atrLen, atrTf)            // width gate (daily)
+riskAtr  = get_atr(atrLen, timeframe.period) // stop sizing (chart timeframe)
+
+// ----------------------------------------------------------------------------
+// Opening range construction
+// ----------------------------------------------------------------------------
+inOR        = not na(time(timeframe.period, orSess, tz))
+newSession  = inOR and not inOR[1]
+orJustEnded = not inOR and inOR[1]
+
+var float orHigh    = na
+var float orLow     = na
+var bool  orLocked  = false
+var int   po3Bias   = 0      // 1 long, -1 short, 0 none
+var bool  tradedSes = false
+
+if newSession
+    orHigh    := high
+    orLow     := low
+    orLocked  := false
+    po3Bias   := 0
+    tradedSes := false
+else if inOR
+    orHigh := math.max(orHigh, high)
+    orLow  := math.min(orLow, low)
+
+if orJustEnded
+    orLocked := true
+
+orWidth = orHigh - orLow
+
+// ----------------------------------------------------------------------------
+// PO3 bias — first post-range liquidity sweep sets the distribution direction.
+// ----------------------------------------------------------------------------
+if orLocked and po3Bias == 0
+    if low < orLow
+        po3Bias := 1     // swept lows (manipulation) -> expect distribution up
+    else if high > orHigh
+        po3Bias := -1    // swept highs (manipulation) -> expect distribution down
+
+// ----------------------------------------------------------------------------
+// Filters
+// ----------------------------------------------------------------------------
+widthOk = not na(orWidth) and not na(dailyAtr) and orWidth >= k * dailyAtr
+
+volSma = ta.sma(volume, volLen)
+volOk  = not useVol or volume >= volSma * volMult
+
+// Fresh-breakout guard: no close beyond the level within the prior N bars.
+freshLong  = not useProx or ta.highest(close, proxBars)[1] <= orHigh
+freshShort = not useProx or ta.lowest(close, proxBars)[1]  >= orLow
+
+po3Long  = not usePO3 or po3Bias == 1
+po3Short = not usePO3 or po3Bias == -1
+
+// ----------------------------------------------------------------------------
+// Signals
+// ----------------------------------------------------------------------------
+crossUp   = ta.crossover(close, orHigh)
+crossDown = ta.crossunder(close, orLow)
+
+tradeable = orLocked and (not oneTrade or not tradedSes) and strategy.position_size == 0
+
+longSig  = tradeable and crossUp   and widthOk and volOk and freshLong  and po3Long
+shortSig = tradeable and crossDown and widthOk and volOk and freshShort and po3Short
+
+// ----------------------------------------------------------------------------
+// Execution — ATR-normalized stop and R-multiple target.
+// ----------------------------------------------------------------------------
+if longSig
+    float risk = stopMult * riskAtr
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=close - risk, limit=close + risk * rr)
+    tradedSes := true
+
+if shortSig
+    float risk = stopMult * riskAtr
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=close + risk, limit=close - risk * rr)
+    tradedSes := true
+
+// ----------------------------------------------------------------------------
+// Plots
+// ----------------------------------------------------------------------------
+plot(orLocked ? orHigh : na, "OR High", color.new(color.teal, 0), 2, plot.style_linebr)
+plot(orLocked ? orLow  : na, "OR Low",  color.new(color.red, 0),  2, plot.style_linebr)
+bgcolor(inOR ? color.new(color.gray, 90) : na, title="OR window")
+
+plotchar(longSig,  "Long signal",  "▲", location.belowbar, color.teal, size=size.tiny)
+plotchar(shortSig, "Short signal", "▼", location.abovebar, color.red,  size=size.tiny)
