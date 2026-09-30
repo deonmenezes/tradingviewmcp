@@ -142,11 +142,22 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     it('tv_launch — auto-detect binary (verify path resolution only)', async () => {
       // tv_launch is destructive (kills TradingView), so we only test path detection
       const { existsSync } = await import('fs');
-      const paths = [
-        '/Applications/TradingView.app/Contents/MacOS/TradingView',
-        `${process.env.HOME}/Applications/TradingView.app/Contents/MacOS/TradingView`,
-      ];
-      const found = paths.some(p => existsSync(p));
+      const { readdirSync } = await import('fs');
+      let found;
+      if (process.platform === 'win32') {
+        // Microsoft Store installs live under WindowsApps; also accept classic installs
+        try { found = readdirSync('C:\\Program Files\\WindowsApps').some(d => d.startsWith('TradingView.Desktop_')); } catch { found = false; }
+        found = found || [
+          `${process.env.LOCALAPPDATA}\\TradingView\\TradingView.exe`,
+          'C:\\Program Files\\TradingView\\TradingView.exe',
+        ].some(p => existsSync(p));
+      } else {
+        found = [
+          '/Applications/TradingView.app/Contents/MacOS/TradingView',
+          `${process.env.HOME}/Applications/TradingView.app/Contents/MacOS/TradingView`,
+          '/opt/TradingView/tradingview',
+        ].some(p => existsSync(p));
+      }
       assert.ok(found, 'TradingView binary found on disk');
     });
   });
@@ -205,7 +216,7 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       await evaluate(`${CHART_API}.setResolution('D', {})`);
       await sleep(1500);
       const tf = await evaluate(`${CHART_API}.resolution()`);
-      assert.equal(tf, '1D');
+      assert.ok(['D', '1D'].includes(tf), `Resolution should be daily, got: ${tf}`);
     });
 
     it('chart_set_type — change chart style', async () => {

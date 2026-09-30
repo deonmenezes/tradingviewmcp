@@ -132,7 +132,9 @@ async function execute(handler, values, positionals) {
   try {
     const result = await handler(values, positionals);
     console.log(JSON.stringify(result, null, 2));
-    process.exit(0);
+    // Defer exit so libuv can close fetch/CDP handles (avoids UV_HANDLE_CLOSING assert on Windows)
+    process.exitCode = 0;
+    setTimeout(() => process.exit(0), 3000).unref();
   } catch (err) {
     handleError(err);
   }
